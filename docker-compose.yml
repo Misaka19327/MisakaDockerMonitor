@@ -1,0 +1,26 @@
+services:
+  monitor:
+    build: .
+    container_name: misaka-docker-monitor
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount Docker socket to access host Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist data
+      - monitor-data:/app/data
+    environment:
+      - STORAGE_TYPE=sqlite
+      - SQLITE_PATH=/app/data/logs.db
+      - DOCKER_SOCKET=/var/run/docker.sock
+      - AUTH_USERNAME=${AUTH_USERNAME:-admin}
+      - AUTH_PASSWORD=${AUTH_PASSWORD:-change-me}
+      - JWT_SECRET=${JWT_SECRET:-}
+      - JWT_TTL_SECONDS=${JWT_TTL_SECONDS:-86400}
+      - RETAIN_LOGS_ON_RESTART=true
+      - HOST=0.0.0.0
+      - PORT=3000
+    restart: unless-stopped
+
+volumes:
+  monitor-data:

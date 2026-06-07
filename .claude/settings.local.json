@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun install *)",
+      "Bash(npx tsc *)",
+      "Bash(bun run *)",
+      "Bash(curl -s -X POST http://localhost:3000/api/auth/login -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s http://localhost:3000/api/containers)",
+      "Bash(kill %1)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(start http://localhost:3000)",
+      "mcp__MCP_DOCKER__browser_navigate",
+      "Bash(curl -s http://127.0.0.1:3000/)",
+      "Bash(curl -v http://127.0.0.1:3000/)",
+      "mcp__browsermcp__browser_navigate",
+      "Bash(start *)",
+      "Bash(curl *)",
+      "Bash(bun -e ' *)",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq *bun*\")",
+      "Bash(lsof -ti:3000)",
+      "Bash(xargs kill -9)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 36548 //PID 6272 //PID 33932)",
+      "Bash(timeout 5 bun -e ' *)",
+      "Bash(taskkill //F //PID 32952 //PID 20248)",
+      "Bash(docker build *)",
+      "Bash(docker run *)",
+      "Bash(docker stop *)",
+      "Bash(docker rm *)",
+      "Bash(MSYS_NO_PATHCONV=1 docker run *)",
+      "Bash(docker exec misaka-docker-monitor *)",
+      "Bash(bun -e \"const d = JSON.parse\\(await Bun.stdin.text\\(\\)\\); console.log\\(JSON.stringify\\(d, null, 2\\)\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "misaka-docker-monitor",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && bun run dev",
+    "dev:client": "cd client && bun run dev",
+    "build:client": "cd client && bun run build",
+    "start": "cd server && bun run start"
+  }
+}
