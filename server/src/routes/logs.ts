@@ -1,9 +1,38 @@
 import { Elysia } from 'elysia'
 import { getUserFromRequest } from '../auth'
 import type { StorageAdapter } from '../storage'
+import type { LogCollector } from '../log-collector'
 import { isSafeFieldName, parseInteger } from '../utils'
 
-export function logRoutes(storage: StorageAdapter, dockerApi?: { getContainer: (id: string) => Promise<any> }) {
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+function formatUptime(startedAt: string): string {
+  try {
+    const start = new Date(startedAt)
+    const diffMs = Date.now() - start.getTime()
+    if (diffMs < 0) return ''
+    const seconds = Math.floor(diffMs / 1000)
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.floor((seconds % 86400) / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    if (days > 0) return `${days}d ${hours}h`
+    if (hours > 0) return `${hours}h ${minutes}m`
+    return `${minutes}m`
+  } catch {
+    return ''
+  }
+}
+
+export function logRoutes(
+  storage: StorageAdapter,
+  dockerApi?: { getContainer: (id: string) => Promise<any>; getContainerStats: (id: string) => Promise<any> },
+  collector?: LogCollector,
+) {
   return new Elysia({ prefix: '/api/logs' })
     .onBeforeHandle(async ({ request, set }) => {
       const user = await getUserFromRequest(request)
@@ -31,7 +60,84 @@ export function logRoutes(storage: StorageAdapter, dockerApi?: { getContainer: (
         offset: parseInteger(offset, 0),
       })
 
-      return result
+      let container = null
+      if (dockerApi) {
+        try {
+          const info = await dockerApi.getContainer(params.containerId)
+          const state = info.State
+          let uptime: string | null = null
+          if (state?.StartedAt) {
+            uptime = formatUptime(state.StartedAt)
+          }
+
+          let cpuPercent: number | null = null
+          let memUsage: string | null = null
+          let memPercent: number | null = null
+          let diskRead: string | null = null
+          let diskWrite: string | null = null
+
+          if (state?.Running) {
+            try {
+              const stats = await dockerApi.getContainerStats(params.containerId)
+              if (stats) {
+                const cpuDelta = (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) - (stats.precpu_stats?.cpu_usage?.total_usage ?? 0)
+                const systemDelta = (stats.cpu_stats?.system_cpu_usage ?? 0) - (stats.precpu_stats?.system_cpu_usage ?? 0)
+                const numCpus = stats.cpu_stats?.online_cpus ?? 1
+                if (systemDelta > 0 && cpuDelta > 0) {
+                  cpuPercent = Math.round((cpuDelta / systemDelta) * numCpus * 10000) / 100
+                }
+                const memUsed = stats.memory_stats?.usage ?? 0
+                const memLimit = stats.memory_stats?.limit ?? 0
+                if (memUsed > 0) {
+                  memUsage = formatBytes(memUsed)
+                  memPercent = memLimit > 0 ? Math.round((memUsed / memLimit) * 10000) / 100 : null
+                }
+                const ioStats = stats.blkio_stats?.io_service_bytes_recursive
+                if (ioStats && ioStats.length > 0) {
+                  let totalRead = 0, totalWrite = 0
+                  for (const entry of ioStats) {
+                    if (entry.op === 'read') totalRead += entry.value ?? 0
+                    if (entry.op === 'write') totalWrite += entry.value ?? 0
+                  }
+                  if (totalRead > 0) diskRead = formatBytes(totalRead)
+                  if (totalWrite > 0) diskWrite = formatBytes(totalWrite)
+                }
+              }
+            } catch { /* stats not available */ }
+          }
+
+          container = {
+            id: info.Id,
+            name: info.Name?.replace(/^\//, ''),
+            image: info.Config?.Image,
+            state: state?.Status,
+            status: state?.Running ? 'running' : state?.Status,
+            created: info.Created,
+            ports: info.NetworkSettings?.Ports,
+            env: info.Config?.Env,
+            watched: collector?.isWatching(params.containerId) ?? false,
+            health: state?.Health?.Status ?? null,
+            exitCode: state?.ExitCode ?? null,
+            pid: state?.Pid ?? null,
+            restartCount: info.RestartCount ?? null,
+            startedAt: state?.StartedAt ?? null,
+            finishedAt: state?.FinishedAt ?? null,
+            uptime,
+            networks: Object.keys(info.NetworkSettings?.Networks || {}),
+            restartPolicy: info.HostConfig?.RestartPolicy?.Name ?? null,
+            stats: cpuPercent !== null || memUsage !== null ? {
+              cpuPercent,
+              memUsage,
+              memPercent,
+              diskRead,
+              diskWrite,
+              uptime,
+            } : null,
+          }
+        } catch { /* container may have been removed */ }
+      }
+
+      return { ...result, container }
     })
     .get('/:containerId/levels', async ({ params }) => {
       return storage.getDistinctLevels(params.containerId)

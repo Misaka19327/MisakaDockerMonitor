@@ -106,8 +106,10 @@ export class SqliteStorage implements StorageAdapter {
     const total = countRow?.total ?? 0
 
     const rows = this.db.query(`
-      SELECT * FROM log_entries WHERE ${where}
-      ORDER BY id ASC LIMIT ? OFFSET ?
+      SELECT * FROM (
+        SELECT * FROM log_entries WHERE ${where}
+        ORDER BY id DESC LIMIT ? OFFSET ?
+      ) ORDER BY id ASC
     `).all(...values, limit, offset) as any[]
 
     return {

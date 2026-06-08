@@ -45,12 +45,6 @@ export function LogViewer() {
   const topRef = useRef<HTMLDivElement>(null)
 
   // Data
-  const { data: container } = useQuery({
-    queryKey: ['container', containerId],
-    queryFn: () => api.containers.get(containerId!),
-    enabled: !!containerId,
-  })
-
   const { data: appConfig } = useQuery({
     queryKey: ['app-config'],
     queryFn: () => api.config.get(),
@@ -82,6 +76,7 @@ export function LogViewer() {
     refetchInterval: paused ? false : 3000,
   })
 
+  const container = logResult?.container ?? null
   const entries = logResult?.entries || []
 
   // Check if any entry has JSON content
@@ -224,7 +219,7 @@ export function LogViewer() {
               )}
               {(container?.restartCount ?? 0) > 0 && (
                 <span className="inline-flex items-center gap-0.5 shrink-0">
-                  <RotateCcw className="h-3 w-3" />{container.restartCount}
+                  <RotateCcw className="h-3 w-3" />{container?.restartCount}
                 </span>
               )}
               {container?.networks && container.networks.length > 0 && (

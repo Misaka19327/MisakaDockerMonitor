@@ -10,7 +10,7 @@ import { configRoutes } from './routes/config'
 import { containerRoutes } from './routes/containers'
 import { logRoutes } from './routes/logs'
 import { toErrorMessage } from './utils'
-import { getContainer } from './docker'
+import { getContainer, getContainerStats } from './docker'
 
 const CLIENT_DIST = resolve(process.cwd(), '../client/dist')
 
@@ -36,7 +36,7 @@ async function main() {
     .use(configRoutes())
     .use(authRoutes())
     .use(containerRoutes(collector, storage))
-    .use(logRoutes(storage, { getContainer }))
+    .use(logRoutes(storage, { getContainer, getContainerStats }, collector))
     .onError(({ code, error, set }) => {
       const message = toErrorMessage(error)
       console.error(`Error [${code}]:`, message)

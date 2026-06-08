@@ -58,6 +58,7 @@ export interface LogQueryResult {
   entries: LogEntry[]
   total: number
   hasMore: boolean
+  container: Container | null
 }
 
 export interface GroupResult {
