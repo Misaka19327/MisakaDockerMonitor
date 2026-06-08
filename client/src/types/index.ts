@@ -1,3 +1,12 @@
+export interface ContainerStats {
+  cpuPercent: number | null
+  memUsage: string | null
+  memPercent: number | null
+  diskRead: string | null
+  diskWrite: string | null
+  uptime: string | null
+}
+
 export interface Container {
   id: string
   name: string
@@ -7,6 +16,16 @@ export interface Container {
   created: number
   ports: { IP?: string; PrivatePort?: number; PublicPort?: number; Type?: string }[]
   watched: boolean
+  stats: ContainerStats | null
+  health?: string | null
+  exitCode?: number | null
+  pid?: number | null
+  restartCount?: number | null
+  startedAt?: string | null
+  finishedAt?: string | null
+  uptime?: string | null
+  networks?: string[]
+  restartPolicy?: string | null
 }
 
 export interface LogEntry {
@@ -44,6 +63,10 @@ export interface LogQueryResult {
 export interface GroupResult {
   field: string
   groups: { value: string; count: number }[]
+}
+
+export interface AppConfig {
+  timezone: string
 }
 
 export interface AuthResponse {

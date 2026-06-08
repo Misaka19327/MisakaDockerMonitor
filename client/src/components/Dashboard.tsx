@@ -5,15 +5,58 @@ import type { Container } from '../types'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card'
 import { Button } from './ui/button'
 import { Badge } from './ui/badge'
-import { Container as ContainerIcon, Eye, EyeOff, Play, Square, RefreshCw } from 'lucide-react'
+import { Container as ContainerIcon, Eye, EyeOff, RefreshCw, Cpu, MemoryStick, HardDrive, Clock } from 'lucide-react'
 
 function stateColor(state: string) {
   switch (state) {
     case 'running': return 'success'
-    case 'exited': return 'destructive'
+    case 'exited': return 'soft-destructive'
     case 'paused': return 'warning'
+    case 'dead': return 'soft-destructive'
     default: return 'secondary'
   }
+}
+
+function ContainerStatsBar({ stats }: { stats: Container['stats'] }) {
+  if (!stats) return null
+
+  const items: { icon: React.ReactNode; label: string; value: string; color?: string }[] = []
+
+  if (stats.cpuPercent !== null) {
+    const color = stats.cpuPercent > 80 ? 'text-red-500' : stats.cpuPercent > 50 ? 'text-amber-500' : 'text-emerald-500'
+    items.push({ icon: <Cpu className="h-3 w-3" />, label: 'CPU', value: `${stats.cpuPercent}%`, color })
+  }
+  if (stats.memUsage) {
+    const color = (stats.memPercent ?? 0) > 80 ? 'text-red-500' : (stats.memPercent ?? 0) > 50 ? 'text-amber-500' : 'text-emerald-500'
+    items.push({
+      icon: <MemoryStick className="h-3 w-3" />,
+      label: 'MEM',
+      value: stats.memPercent !== null ? `${stats.memUsage} (${stats.memPercent}%)` : stats.memUsage,
+      color,
+    })
+  }
+  if (stats.diskRead || stats.diskWrite) {
+    const parts: string[] = []
+    if (stats.diskRead) parts.push(`R ${stats.diskRead}`)
+    if (stats.diskWrite) parts.push(`W ${stats.diskWrite}`)
+    items.push({ icon: <HardDrive className="h-3 w-3" />, label: 'DISK', value: parts.join(' / ') })
+  }
+  if (stats.uptime) {
+    items.push({ icon: <Clock className="h-3 w-3" />, label: 'UP', value: stats.uptime })
+  }
+
+  if (items.length === 0) return null
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-[11px] text-muted-foreground">
+      {items.map((item, i) => (
+        <span key={i} className="inline-flex items-center gap-1">
+          {item.icon}
+          <span className={item.color}>{item.value}</span>
+        </span>
+      ))}
+    </div>
+  )
 }
 
 export function Dashboard() {
@@ -84,13 +127,17 @@ export function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground mb-3">{c.status}</p>
-              <div className="flex gap-2">
+              <p className="text-xs text-muted-foreground mb-2">{c.status}</p>
+              <div className="min-h-[20px]">
+                <ContainerStatsBar stats={c.stats} />
+              </div>
+              <div className="grid grid-cols-[1fr_1fr] gap-2 mt-3">
                 <Button
                   size="sm"
                   variant={c.watched ? 'outline' : 'default'}
                   onClick={() => c.watched ? unwatchMutation.mutate(c.id) : watchMutation.mutate(c.id)}
                   disabled={watchMutation.isPending || unwatchMutation.isPending}
+                  className="w-full"
                 >
                   {c.watched ? (
                     <>
@@ -104,11 +151,14 @@ export function Dashboard() {
                     </>
                   )}
                 </Button>
-                {c.watched && (
-                  <Button size="sm" variant="outline" onClick={() => navigate(`/container/${c.id}`)}>
-                    View Logs
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate(`/container/${c.id}`)}
+                  className={`w-full ${!c.watched ? 'invisible pointer-events-none' : ''}`}
+                >
+                  View Logs
+                </Button>
               </div>
             </CardContent>
           </Card>

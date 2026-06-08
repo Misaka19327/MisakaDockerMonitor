@@ -3,7 +3,7 @@ import { getUserFromRequest } from '../auth'
 import type { StorageAdapter } from '../storage'
 import { isSafeFieldName, parseInteger } from '../utils'
 
-export function logRoutes(storage: StorageAdapter) {
+export function logRoutes(storage: StorageAdapter, dockerApi?: { getContainer: (id: string) => Promise<any> }) {
   return new Elysia({ prefix: '/api/logs' })
     .onBeforeHandle(async ({ request, set }) => {
       const user = await getUserFromRequest(request)
@@ -70,6 +70,7 @@ export function logRoutes(storage: StorageAdapter) {
       const containerId = params.containerId
       let interval: ReturnType<typeof setInterval> | null = null
       let heartbeat: ReturnType<typeof setInterval> | null = null
+      let statusInterval: ReturnType<typeof setInterval> | null = null
 
       return new ReadableStream({
         start(controller) {
@@ -77,6 +78,10 @@ export function logRoutes(storage: StorageAdapter) {
 
           const sendEvent = (data: unknown) => {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+          }
+
+          const sendStatusEvent = (data: unknown) => {
+            controller.enqueue(encoder.encode(`event: status\ndata: ${JSON.stringify(data)}\n\n`))
           }
 
           let lastId = 0
@@ -106,10 +111,46 @@ export function logRoutes(storage: StorageAdapter) {
           heartbeat = setInterval(() => {
             controller.enqueue(encoder.encode(`:heartbeat\n\n`))
           }, 15000)
+
+          if (dockerApi) {
+            statusInterval = setInterval(async () => {
+              try {
+                const info = await dockerApi.getContainer(containerId)
+                const state = info.State
+                let uptime: string | null = null
+                if (state?.StartedAt) {
+                  const start = new Date(state.StartedAt)
+                  const diffMs = Date.now() - start.getTime()
+                  if (diffMs >= 0) {
+                    const seconds = Math.floor(diffMs / 1000)
+                    const days = Math.floor(seconds / 86400)
+                    const hours = Math.floor((seconds % 86400) / 3600)
+                    const minutes = Math.floor((seconds % 3600) / 60)
+                    if (days > 0) uptime = `${days}d ${hours}h`
+                    else if (hours > 0) uptime = `${hours}h ${minutes}m`
+                    else uptime = `${minutes}m`
+                  }
+                }
+                sendStatusEvent({
+                  state: state?.Status,
+                  health: state?.Health?.Status ?? null,
+                  exitCode: state?.ExitCode ?? null,
+                  pid: state?.Pid ?? null,
+                  restartCount: info.RestartCount ?? null,
+                  startedAt: state?.StartedAt ?? null,
+                  finishedAt: state?.FinishedAt ?? null,
+                  uptime,
+                })
+              } catch {
+                // container may have been removed
+              }
+            }, 10000)
+          }
         },
         cancel() {
           if (interval) clearInterval(interval)
           if (heartbeat) clearInterval(heartbeat)
+          if (statusInterval) clearInterval(statusInterval)
         },
       })
     })

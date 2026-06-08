@@ -1,4 +1,4 @@
-import type { AuthResponse, Container, ContainerInstance, LogQueryResult, GroupResult, LogEntry } from '../types'
+import type { AppConfig, AuthResponse, Container, ContainerInstance, LogQueryResult, GroupResult, LogEntry } from '../types'
 
 const BASE = ''
 
@@ -35,6 +35,12 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  config: {
+    get(): Promise<AppConfig> {
+      return request('/api/config')
+    },
+  },
+
   auth: {
     login(username: string, password: string): Promise<AuthResponse> {
       return request('/api/auth/login', {

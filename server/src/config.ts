@@ -5,15 +5,31 @@ import { dirname } from 'path'
 const generatedJwtSecret = randomBytes(32).toString('hex')
 const authUsername = process.env.AUTH_USERNAME || 'admin'
 const authPassword = process.env.AUTH_PASSWORD || 'change-me'
+const defaultTimeZone = 'Asia/Shanghai'
+
+function resolveTimeZone(value: string | undefined): string {
+  const candidate = value || defaultTimeZone
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date())
+    return candidate
+  } catch {
+    console.warn(`Invalid timezone "${candidate}", falling back to ${defaultTimeZone}`)
+    return defaultTimeZone
+  }
+}
 
 export const config = {
   port: parseInt(process.env.PORT || '3000'),
   host: process.env.HOST || '0.0.0.0',
+  timezone: resolveTimeZone(process.env.TIMEZONE || process.env.TZ),
 
   storageType: (process.env.STORAGE_TYPE || 'sqlite') as 'sqlite' | 'clickhouse' | 'mysql',
 
   sqlite: {
     path: process.env.SQLITE_PATH || './data/logs.db',
+    journalMode: (process.env.SQLITE_JOURNAL_MODE || 'WAL').toUpperCase(),
+    synchronous: (process.env.SQLITE_SYNCHRONOUS || 'NORMAL').toUpperCase(),
   },
 
   mysql: {

@@ -29,16 +29,26 @@ export function validateCredentials(username: string, password: string): boolean
   return username === config.auth.username && password === config.auth.password
 }
 
-/** Extract user from Authorization header, return null if not authenticated */
+/** Extract user from Authorization header or query param token, return null if not authenticated */
 export async function getUserFromRequest(request: Request): Promise<{ username: string } | null> {
+  let token: string | null = null
+
   const auth =
     request.headers.get('authorization') ||
     request.headers.get('Authorization') ||
     null
 
-  if (!auth) return null
+  if (auth) {
+    token = auth.startsWith('Bearer ') ? auth.slice(7) : auth
+  }
 
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : auth
+  if (!token) {
+    const url = new URL(request.url)
+    token = url.searchParams.get('token')
+  }
+
+  if (!token) return null
+
   const payload = await verifyToken(token)
   if (!payload || !payload.sub) return null
 

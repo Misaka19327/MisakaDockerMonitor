@@ -1,7 +1,7 @@
 import { createClient } from '@clickhouse/client'
 import { config } from '../config'
 import type { StorageAdapter, LogEntry, LogQueryParams, LogQueryResult, ContainerInstance, GroupResult } from './index'
-import { assertSafeFieldName, escapeClickHouseString } from '../utils'
+import { assertSafeFieldName, escapeClickHouseString, nowISO } from '../utils'
 
 export class ClickHouseStorage implements StorageAdapter {
   private client!: any
@@ -53,7 +53,7 @@ export class ClickHouseStorage implements StorageAdapter {
           content String,
           has_sql UInt8,
           sql Nullable(String),
-          created_at DateTime DEFAULT now()
+          created_at DateTime
         )
         ENGINE = MergeTree()
         ORDER BY (container_id, instance_id, id)
@@ -154,7 +154,7 @@ export class ClickHouseStorage implements StorageAdapter {
         id,
         container_id: containerId,
         container_name: containerName,
-        started_at: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        started_at: nowISO().replace('T', ' ').substring(0, 19),
         stopped_at: null,
         status: 'running',
       }],
@@ -166,8 +166,9 @@ export class ClickHouseStorage implements StorageAdapter {
   async stopInstance(instanceId: string): Promise<void> {
     const escapedInstanceId = escapeClickHouseString(instanceId)
     // ClickHouse doesn't support UPDATE easily, use ALTER TABLE
+    const stoppedAt = nowISO().replace('T', ' ').substring(0, 19)
     await this.client.exec({
-      query: `ALTER TABLE container_instances UPDATE stopped_at = now(), status = 'stopped' WHERE id = '${escapedInstanceId}'`,
+      query: `ALTER TABLE container_instances UPDATE stopped_at = '${stoppedAt}', status = 'stopped' WHERE id = '${escapedInstanceId}'`,
     })
   }
 
@@ -223,6 +224,29 @@ export class ClickHouseStorage implements StorageAdapter {
     const escapedContainerId = escapeClickHouseString(containerId)
     await this.client.exec({ query: `ALTER TABLE log_entries DELETE WHERE container_id = '${escapedContainerId}'` })
     await this.client.exec({ query: `ALTER TABLE container_instances DELETE WHERE container_id = '${escapedContainerId}'` })
+  }
+
+  async deleteLogsBefore(cutoff: string): Promise<number> {
+    const escapedCutoff = escapeClickHouseString(cutoff)
+    await this.client.exec({
+      query: `ALTER TABLE log_entries DELETE WHERE created_at < '${escapedCutoff}'`,
+    })
+    return 0
+  }
+
+  async deleteStoppedInstancesWithNoLogs(): Promise<number> {
+    const result = await this.client.query({
+      query: `SELECT ci.id FROM container_instances ci LEFT ANTI JOIN log_entries le ON ci.id = le.instance_id WHERE ci.status = 'stopped'`,
+      format: 'JSONEachRow',
+    })
+    const rows = await result.json() as any[]
+    for (const row of rows) {
+      const escapedId = escapeClickHouseString(row.id)
+      await this.client.exec({
+        query: `ALTER TABLE container_instances DELETE WHERE id = '${escapedId}'`,
+      })
+    }
+    return rows.length
   }
 
   async close(): Promise<void> {

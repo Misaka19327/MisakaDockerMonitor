@@ -1,5 +1,6 @@
 import mysql from 'mysql2/promise'
 import { config } from '../config'
+import { nowISO } from '../utils'
 import type { StorageAdapter, LogEntry, LogQueryParams, LogQueryResult, ContainerInstance, GroupResult } from './index'
 
 export class MysqlStorage implements StorageAdapter {
@@ -49,7 +50,7 @@ export class MysqlStorage implements StorageAdapter {
           content TEXT NOT NULL,
           has_sql TINYINT NOT NULL DEFAULT 0,
           sql_text MEDIUMTEXT NULL,
-          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_at DATETIME NOT NULL,
           INDEX idx_le_container (container_id),
           INDEX idx_le_instance (instance_id),
           INDEX idx_le_level (level),
@@ -146,13 +147,13 @@ export class MysqlStorage implements StorageAdapter {
     const id = `inst_${containerId}_${Date.now()}`
     await this.pool.execute(
       `INSERT INTO container_instances (id, container_id, container_name, started_at, status) VALUES (?, ?, ?, ?, 'running')`,
-      [id, containerId, containerName, new Date().toISOString()],
+      [id, containerId, containerName, nowISO()],
     )
     return id
   }
 
   async stopInstance(instanceId: string): Promise<void> {
-    await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [new Date().toISOString(), instanceId])
+    await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [nowISO(), instanceId])
   }
 
   async getInstances(containerId: string): Promise<ContainerInstance[]> {
@@ -193,6 +194,23 @@ export class MysqlStorage implements StorageAdapter {
   async deleteLogsByContainer(containerId: string): Promise<void> {
     await this.pool.execute('DELETE FROM log_entries WHERE container_id = ?', [containerId])
     await this.pool.execute('DELETE FROM container_instances WHERE container_id = ?', [containerId])
+  }
+
+  async deleteLogsBefore(cutoff: string): Promise<number> {
+    const [result] = await this.pool.execute(
+      'DELETE FROM log_entries WHERE created_at < ?',
+      [cutoff],
+    ) as any
+    return result.affectedRows
+  }
+
+  async deleteStoppedInstancesWithNoLogs(): Promise<number> {
+    const [result] = await this.pool.execute(`
+      DELETE ci FROM container_instances ci
+      LEFT JOIN log_entries le ON ci.id = le.instance_id
+      WHERE ci.status = 'stopped' AND le.id IS NULL
+    `) as any
+    return result.affectedRows
   }
 
   async close(): Promise<void> {

@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { config } from '../config'
 import { ensureDataDir } from '../config'
+import { nowISO } from '../utils'
 import type { StorageAdapter, LogEntry, LogQueryParams, LogQueryResult, ContainerInstance, GroupResult } from './index'
 
 export class SqliteStorage implements StorageAdapter {
@@ -41,7 +42,7 @@ export class SqliteStorage implements StorageAdapter {
         content TEXT NOT NULL,
         has_sql INTEGER NOT NULL DEFAULT 0,
         sql TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TEXT NOT NULL
       )
     `)
 
@@ -106,7 +107,7 @@ export class SqliteStorage implements StorageAdapter {
 
     const rows = this.db.query(`
       SELECT * FROM log_entries WHERE ${where}
-      ORDER BY id DESC LIMIT ? OFFSET ?
+      ORDER BY id ASC LIMIT ? OFFSET ?
     `).all(...values, limit, offset) as any[]
 
     return {
@@ -140,7 +141,7 @@ export class SqliteStorage implements StorageAdapter {
     const id = `inst_${containerId}_${Date.now()}`
     this.db.run(
       `INSERT INTO container_instances (id, container_id, container_name, started_at, status) VALUES (?, ?, ?, ?, 'running')`,
-      [id, containerId, containerName, new Date().toISOString()],
+      [id, containerId, containerName, nowISO()],
     )
     return id
   }
@@ -148,7 +149,7 @@ export class SqliteStorage implements StorageAdapter {
   async stopInstance(instanceId: string): Promise<void> {
     this.db.run(
       `UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`,
-      [new Date().toISOString(), instanceId],
+      [nowISO(), instanceId],
     )
   }
 
@@ -196,6 +197,23 @@ export class SqliteStorage implements StorageAdapter {
   async deleteLogsByContainer(containerId: string): Promise<void> {
     this.db.run('DELETE FROM log_entries WHERE container_id = ?', [containerId])
     this.db.run('DELETE FROM container_instances WHERE container_id = ?', [containerId])
+  }
+
+  async deleteLogsBefore(cutoff: string): Promise<number> {
+    const result = this.db.run(
+      'DELETE FROM log_entries WHERE created_at < ?',
+      [cutoff],
+    )
+    return result.changes
+  }
+
+  async deleteStoppedInstancesWithNoLogs(): Promise<number> {
+    const result = this.db.run(`
+      DELETE FROM container_instances
+      WHERE status = 'stopped'
+      AND id NOT IN (SELECT DISTINCT instance_id FROM log_entries WHERE instance_id IS NOT NULL)
+    `)
+    return result.changes
   }
 
   async close(): Promise<void> {

@@ -1,10 +1,10 @@
 import type { Readable } from 'stream'
 import type { StorageAdapter } from './storage'
-import { streamContainerLogs, watchContainerEvents } from './docker'
+import { listContainers, streamContainerLogs, watchContainerEvents } from './docker'
 import { parseLogLine } from './log-parser'
 import { parsedLogToEntry } from './storage'
 import { config } from './config'
-import { toErrorMessage } from './utils'
+import { toErrorMessage, nowISO } from './utils'
 
 interface WatchedContainer {
   containerId: string
@@ -32,20 +32,45 @@ export class LogCollector {
     } catch (err) {
       console.warn('Failed to watch Docker events (non-fatal):', toErrorMessage(err))
     }
+
+    // Auto-discover and watch all currently running containers
+    try {
+      const containers = await listContainers(false)
+      for (const container of containers) {
+        const name = container.Names?.[0]?.replace(/^\//, '') || container.Id
+        try {
+          await this.watchContainer(container.Id, name, true)
+          console.log(`Auto-watching container: ${name}`)
+        } catch (err) {
+          console.warn(`Failed to auto-watch container ${name}:`, toErrorMessage(err))
+        }
+      }
+      console.log(`Auto-discovered ${containers.length} running containers`)
+    } catch (err) {
+      console.warn('Failed to list running containers (non-fatal):', toErrorMessage(err))
+    }
   }
 
-  async watchContainer(containerId: string, containerName: string) {
+  async watchContainer(containerId: string, containerName: string, forceNewInstance = false) {
     if (this.watched.has(containerId)) return
 
+    // If forcing new instance, stop any stale "running" instance from a previous server run
+    if (forceNewInstance) {
+      const existing = await this.storage.getActiveInstance(containerId)
+      if (existing) {
+        await this.storage.stopInstance(existing.id)
+      }
+    }
+
     // Get or create instance
-    let instance = await this.storage.getActiveInstance(containerId)
+    let instance = forceNewInstance ? null : await this.storage.getActiveInstance(containerId)
     if (!instance) {
       const instanceId = await this.storage.createInstance(containerId, containerName)
       instance = {
         id: instanceId,
         containerId,
         containerName,
-        startedAt: new Date().toISOString(),
+        startedAt: nowISO(),
         stoppedAt: null,
         status: 'running',
       }

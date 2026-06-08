@@ -13,6 +13,8 @@ services:
       - STORAGE_TYPE=sqlite
       - SQLITE_PATH=/app/data/logs.db
       - DOCKER_SOCKET=/var/run/docker.sock
+      - TIMEZONE=${TIMEZONE:-Asia/Shanghai}
+      - TZ=${TIMEZONE:-Asia/Shanghai}
       - AUTH_USERNAME=${AUTH_USERNAME:-admin}
       - AUTH_PASSWORD=${AUTH_PASSWORD:-change-me}
       - JWT_SECRET=${JWT_SECRET:-}

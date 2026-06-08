@@ -12,7 +12,7 @@ function Tabs({ defaultValue, value, onValueChange, children, className }: {
   const current = value ?? internal
 
   return (
-    <div className={className} data-value={current}>
+    <div className={cn("h-full flex flex-col", className)} data-value={current}>
       {React.Children.map(children, child => {
         if (React.isValidElement(child) && typeof child.type === 'function') {
           return React.cloneElement(child as any, {
@@ -63,7 +63,7 @@ function TabsTrigger({ children, value, className, _active, _onClick }: any) {
 function TabsContent({ children, value, className, _value }: any) {
   if (_value !== value) return null
   return (
-    <div className={cn("mt-2 ring-offset-background focus-visible:outline-none", className)}>
+    <div className={cn("mt-2 flex-1 min-h-0 ring-offset-background focus-visible:outline-none", className)}>
       {children}
     </div>
   )

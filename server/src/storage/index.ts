@@ -1,4 +1,5 @@
 import type { ParsedLog } from '../log-parser'
+import { nowISO } from '../utils'
 
 export interface LogEntry {
   id?: number
@@ -64,6 +65,8 @@ export interface StorageAdapter {
   getDistinctFieldValues(containerId: string, field: string): Promise<string[]>
   deleteLogsByInstance(instanceId: string): Promise<void>
   deleteLogsByContainer(containerId: string): Promise<void>
+  deleteLogsBefore(cutoff: string): Promise<number>
+  deleteStoppedInstancesWithNoLogs(): Promise<number>
   close(): Promise<void>
 }
 
@@ -87,7 +90,7 @@ export function parsedLogToEntry(
     content: parsed.content,
     hasSql: parsed.hasSql,
     sql: parsed.sql,
-    createdAt: new Date().toISOString(),
+    createdAt: nowISO(),
   }
 }
 

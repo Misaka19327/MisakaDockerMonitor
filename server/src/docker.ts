@@ -14,7 +14,7 @@ export function getDocker(): Docker {
 
 export async function listContainers(all = false) {
   const d = getDocker()
-  return d.listContainers({ all })
+  return d.listContainers({ all }) as Promise<any[]>
 }
 
 export async function getContainer(id: string) {

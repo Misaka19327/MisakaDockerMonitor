@@ -3,6 +3,7 @@ import type { LogEntry } from '../types'
 import { Badge } from './ui/badge'
 import { SqlView } from './SqlView'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import { formatTimestamp } from '../lib/time'
 
 function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'destructive' | 'secondary' {
   if (!level) return 'secondary'
@@ -14,21 +15,7 @@ function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'd
   return 'secondary'
 }
 
-function formatTimestamp(ts: string | null): string {
-  if (!ts) return ''
-  try {
-    const d = new Date(ts)
-    if (isNaN(d.getTime())) return ts
-    return d.toLocaleString('zh-CN', {
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    } as Intl.DateTimeFormatOptions)
-  } catch {
-    return ts
-  }
-}
-
-export function LogEntryView({ entry }: { entry: LogEntry }) {
+export function LogEntryView({ entry, timezone }: { entry: LogEntry; timezone?: string }) {
   const [expanded, setExpanded] = useState(false)
   const [showSql, setShowSql] = useState(false)
 
@@ -40,19 +27,21 @@ export function LogEntryView({ entry }: { entry: LogEntry }) {
         onToggle={() => setExpanded(!expanded)}
         showSql={showSql}
         onToggleSql={() => setShowSql(!showSql)}
+        timezone={timezone}
       />
     )
   }
 
-  return <TextLogEntry entry={entry} />
+  return <TextLogEntry entry={entry} timezone={timezone} />
 }
 
-function JsonLogEntry({ entry, expanded, onToggle, showSql, onToggleSql }: {
+function JsonLogEntry({ entry, expanded, onToggle, showSql, onToggleSql, timezone }: {
   entry: LogEntry
   expanded: boolean
   onToggle: () => void
   showSql: boolean
   onToggleSql: () => void
+  timezone?: string
 }) {
   let parsed: Record<string, unknown> = {}
   try {
@@ -80,7 +69,7 @@ function JsonLogEntry({ entry, expanded, onToggle, showSql, onToggleSql }: {
           {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
         </span>
         <span className="text-xs text-muted-foreground shrink-0 w-8 text-right">{entry.lineNumber}</span>
-        {timestamp && <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(timestamp)}</span>}
+        {timestamp && <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(timestamp, timezone)}</span>}
         {level && <Badge variant={levelVariant(level)} className="shrink-0 text-[10px] px-1.5 py-0 h-4">{level}</Badge>}
         {caller && <span className="text-xs text-purple-600 truncate max-w-48">{caller}</span>}
         {method && path && (
@@ -122,13 +111,13 @@ function JsonLogEntry({ entry, expanded, onToggle, showSql, onToggleSql }: {
   )
 }
 
-function TextLogEntry({ entry }: { entry: LogEntry }) {
+function TextLogEntry({ entry, timezone }: { entry: LogEntry; timezone?: string }) {
   return (
     <div className="group rounded hover:bg-muted/50 transition-colors">
       <div className="flex items-start gap-2 px-2 py-1">
         <span className="text-xs text-muted-foreground shrink-0 w-8 text-right">{entry.lineNumber}</span>
         {entry.timestamp && (
-          <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(entry.timestamp)}</span>
+          <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(entry.timestamp, timezone)}</span>
         )}
         <pre className="log-entry-text flex-1">{entry.rawContent}</pre>
       </div>
