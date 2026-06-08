@@ -29,7 +29,15 @@
       "Bash(docker rm *)",
       "Bash(MSYS_NO_PATHCONV=1 docker run *)",
       "Bash(docker exec misaka-docker-monitor *)",
-      "Bash(bun -e \"const d = JSON.parse\\(await Bun.stdin.text\\(\\)\\); console.log\\(JSON.stringify\\(d, null, 2\\)\\)\")"
+      "Bash(bun -e \"const d = JSON.parse\\(await Bun.stdin.text\\(\\)\\); console.log\\(JSON.stringify\\(d, null, 2\\)\\)\")",
+      "Bash(bunx tsc *)",
+      "Bash(node -e \"const m = require\\('lucide-react'\\); console.log\\(Object.keys\\(m\\).filter\\(k => k.toLowerCase\\(\\).includes\\('memo'\\)\\).join\\(', '\\)\\)\")",
+      "Bash(npx vite *)",
+      "Bash(npx bun *)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc.exe --noEmit)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
