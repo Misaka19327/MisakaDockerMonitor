@@ -4,6 +4,7 @@ import { cors } from '@elysiajs/cors'
 import { config } from './config'
 import { createStorage } from './storage'
 import { LogCollector } from './log-collector'
+import { WatchState } from './watch-state'
 import { startCleanupScheduler } from './scheduler'
 import { authRoutes } from './routes/auth'
 import { configRoutes } from './routes/config'
@@ -28,7 +29,8 @@ async function main() {
   const stopCleanup = startCleanupScheduler(storage)
 
   // Initialize log collector
-  const collector = new LogCollector(storage)
+  const watchState = new WatchState()
+  const collector = new LogCollector(storage, watchState)
 
   // Create Elysia app (API only)
   const app = new Elysia()
