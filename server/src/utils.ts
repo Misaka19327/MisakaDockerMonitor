@@ -193,3 +193,27 @@ export function parseInteger(value: unknown, fallback: number): number {
 
   return fallback
 }
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+export function formatUptime(startedAt: string): string {
+  try {
+    const start = new Date(startedAt)
+    const diffMs = Date.now() - start.getTime()
+    if (diffMs < 0) return ''
+    const seconds = Math.floor(diffMs / 1000)
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.floor((seconds % 86400) / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    if (days > 0) return `${days}d ${hours}h`
+    if (hours > 0) return `${hours}h ${minutes}m`
+    return `${minutes}m`
+  } catch {
+    return ''
+  }
+}
