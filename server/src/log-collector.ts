@@ -1,10 +1,10 @@
-import type { Readable } from 'stream'
-import type { StorageAdapter } from './storage'
-import { listContainers, streamContainerLogs, watchContainerEvents } from './docker'
-import { parseLogLine } from './log-parser'
-import { parsedLogToEntry } from './storage'
-import { config } from './config'
-import { toErrorMessage, nowISO } from './utils'
+import type {Readable} from 'stream'
+import type {StorageAdapter} from './storage'
+import {parsedLogToEntry} from './storage'
+import {listContainers, streamContainerLogs, watchContainerEvents} from './docker'
+import {parseLogLine} from './log-parser'
+import {config} from './config'
+import {nowISO, toErrorMessage} from './utils'
 
 interface WatchedContainer {
   containerId: string
@@ -58,7 +58,9 @@ export class LogCollector {
       console.warn('Failed to list running containers (non-fatal):', toErrorMessage(err))
     }
 
-    this.flushTimer = setInterval(() => { void this.flushBuffer() }, LogCollector.FLUSH_INTERVAL_MS)
+    this.flushTimer = setInterval(() => {
+      void this.flushBuffer()
+    }, LogCollector.FLUSH_INTERVAL_MS)
   }
 
   async watchContainer(containerId: string, containerName: string, forceNewInstance = false) {
@@ -129,11 +131,11 @@ export class LogCollector {
           watched.lineNumber++
           const parsed = parseLogLine(line)
           const entry = parsedLogToEntry(
-            parsed,
-            watched.containerId,
-            watched.containerName,
-            watched.instanceId,
-            watched.lineNumber,
+              parsed,
+              watched.containerId,
+              watched.containerName,
+              watched.instanceId,
+              watched.lineNumber,
           )
           this.logBuffer.push(entry)
           if (this.logBuffer.length >= LogCollector.FLUSH_THRESHOLD) {

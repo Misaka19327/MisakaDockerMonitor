@@ -22,7 +22,7 @@ export function parseLogLine(line: string): ParsedLog {
     hasSql: false,
     sql: null,
   }
-
+  
   // Try JSON parse
   try {
     const obj = JSON.parse(line)
@@ -33,7 +33,7 @@ export function parseLogLine(line: string): ParsedLog {
       result.level = extractLevel(obj)
       result.content = extractContent(obj)
       result.fields = obj
-
+      
       // Check for SQL field
       const sql = findSqlField(obj)
       if (sql) {
@@ -47,7 +47,7 @@ export function parseLogLine(line: string): ParsedLog {
     result.timestamp = extractTimestampFromText(line)
     result.content = line
   }
-
+  
   return result
 }
 

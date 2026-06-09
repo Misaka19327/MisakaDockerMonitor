@@ -7,14 +7,14 @@ let docker: Docker
 
 export function getDocker(): Docker {
   if (!docker) {
-    docker = new Docker({ socketPath: config.docker.socketPath })
+    docker = new Docker({socketPath: config.docker.socketPath})
   }
   return docker
 }
 
 export async function listContainers(all = false) {
   const d = getDocker()
-  return d.listContainers({ all }) as Promise<any[]>
+  return d.listContainers({all}) as Promise<any[]>
 }
 
 export async function getContainer(id: string) {
@@ -27,7 +27,7 @@ export async function getContainerStats(id: string) {
   const d = getDocker()
   const container = d.getContainer(id)
   return new Promise<ContainerStats>((resolve, reject) => {
-    container.stats({ stream: false }, (err, stats) => {
+    container.stats({stream: false}, (err, stats) => {
       if (err) reject(err)
       else if (stats) resolve(stats)
       else reject(new Error('No stats returned'))
@@ -61,9 +61,9 @@ export async function streamContainerLogs(opts: LogStreamOptions) {
   }
 
   const stream: Readable =
-    opts.follow === false
-      ? Readable.from([await container.logs({ ...streamOpts, follow: false })])
-      : await container.logs({ ...streamOpts, follow: true }) as unknown as Readable
+      opts.follow === false
+          ? Readable.from([await container.logs({...streamOpts, follow: false})])
+          : await container.logs({...streamOpts, follow: true}) as unknown as Readable
 
   // Use dockerode's built-in demuxStream to properly separate headers
   const stdout = new PassThrough()
@@ -117,10 +117,14 @@ export async function streamContainerLogs(opts: LogStreamOptions) {
   return stream
 }
 
-export async function watchContainerEvents(onEvent: (event: { type: string; containerId: string; containerName: string }) => void) {
+export async function watchContainerEvents(onEvent: (event: {
+  type: string;
+  containerId: string;
+  containerName: string
+}) => void) {
   const d = getDocker()
 
-  const stream = await d.getEvents({ filters: { event: ['start', 'die', 'restart'] } }) as unknown as Readable
+  const stream = await d.getEvents({filters: {event: ['start', 'die', 'restart']}}) as unknown as Readable
   let buffer = ''
 
   stream.on('data', (chunk: Buffer) => {
