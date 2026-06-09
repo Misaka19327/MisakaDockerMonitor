@@ -26,9 +26,11 @@ export class SqliteStorage implements StorageAdapter {
         container_name TEXT NOT NULL,
         started_at TEXT NOT NULL,
         stopped_at TEXT,
-        status TEXT NOT NULL DEFAULT 'running'
+        status TEXT NOT NULL DEFAULT 'running',
+        watched INTEGER NOT NULL DEFAULT 1
       )
     `)
+    try { this.db.run('ALTER TABLE container_instances ADD COLUMN watched INTEGER NOT NULL DEFAULT 1') } catch {}
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS log_entries (
@@ -185,6 +187,20 @@ export class SqliteStorage implements StorageAdapter {
       id: row.id, containerId: row.container_id, containerName: row.container_name,
       startedAt: row.started_at, stoppedAt: row.stopped_at, status: row.status,
     }
+  }
+
+  async isContainerWatched(containerId: string): Promise<boolean> {
+    const row = this.db.query(
+      `SELECT watched FROM container_instances WHERE container_id = ? ORDER BY started_at DESC LIMIT 1`,
+    ).get(containerId) as { watched: number } | null
+    return row ? row.watched === 1 : true
+  }
+
+  async setContainerWatched(containerId: string, watched: boolean): Promise<void> {
+    this.db.run(
+      `UPDATE container_instances SET watched = ? WHERE container_id = ?`,
+      [watched ? 1 : 0, containerId],
+    )
   }
 
   async getDistinctLevels(containerId: string): Promise<string[]> {

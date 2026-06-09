@@ -30,7 +30,8 @@ export class ClickHouseStorage implements StorageAdapter {
           container_name String,
           started_at DateTime,
           stopped_at Nullable(DateTime),
-          status String
+          status String,
+          watched UInt8 DEFAULT 1
         )
         ENGINE = MergeTree()
         ORDER BY (container_id, started_at)
@@ -197,6 +198,23 @@ export class ClickHouseStorage implements StorageAdapter {
     if (!rows[0]) return null
     const r = rows[0]
     return { id: r.id, containerId: r.container_id, containerName: r.container_name, startedAt: r.started_at, stoppedAt: r.stopped_at, status: r.status }
+  }
+
+  async isContainerWatched(containerId: string): Promise<boolean> {
+    const result = await this.client.query({
+      query: `SELECT watched FROM container_instances WHERE container_id = '${escapeClickHouseString(containerId)}' ORDER BY started_at DESC LIMIT 1`,
+      format: 'JSONEachRow',
+    })
+    const rows = await result.json()
+    if (!rows[0]) return true
+    return (rows[0] as any).watched === 1
+  }
+
+  async setContainerWatched(containerId: string, watched: boolean): Promise<void> {
+    const escapedContainerId = escapeClickHouseString(containerId)
+    await this.client.exec({
+      query: `ALTER TABLE container_instances UPDATE watched = ${watched ? 1 : 0} WHERE container_id = '${escapedContainerId}'`,
+    })
   }
 
   async getDistinctLevels(containerId: string): Promise<string[]> {

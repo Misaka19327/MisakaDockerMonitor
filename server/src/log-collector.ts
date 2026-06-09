@@ -1,6 +1,5 @@
 import type { Readable } from 'stream'
 import type { StorageAdapter } from './storage'
-import type { WatchState } from './watch-state'
 import { listContainers, streamContainerLogs, watchContainerEvents } from './docker'
 import { parseLogLine } from './log-parser'
 import { parsedLogToEntry } from './storage'
@@ -17,7 +16,6 @@ interface WatchedContainer {
 
 export class LogCollector {
   private storage: StorageAdapter
-  private watchState: WatchState | null
   private watched = new Map<string, WatchedContainer>()
   private eventStream: Readable | null = null
   private logBuffer: import('./storage').LogEntry[] = []
@@ -25,9 +23,8 @@ export class LogCollector {
   private static readonly FLUSH_INTERVAL_MS = 1000
   private static readonly FLUSH_THRESHOLD = 50
 
-  constructor(storage: StorageAdapter, watchState?: WatchState) {
+  constructor(storage: StorageAdapter) {
     this.storage = storage
-    this.watchState = watchState ?? null
   }
 
   async start() {
@@ -45,7 +42,7 @@ export class LogCollector {
       const containers = await listContainers(false)
       for (const container of containers) {
         const name = container.Names?.[0]?.replace(/^\//, '') || container.Id
-        if (this.watchState && !this.watchState.isWatched(container.Id)) {
+        if (!(await this.storage.isContainerWatched(container.Id))) {
           console.log(`Skipping auto-watch for container: ${name} (previously unwatched)`)
           continue
         }
@@ -97,7 +94,7 @@ export class LogCollector {
       stream: null,
     }
     this.watched.set(containerId, watched)
-    this.watchState?.setWatched(containerId, true)
+    await this.storage.setContainerWatched(containerId, true)
 
     // Start streaming logs
     await this.startStreaming(watched)
@@ -109,7 +106,7 @@ export class LogCollector {
 
     watched.stream?.destroy()
     this.watched.delete(containerId)
-    this.watchState?.setWatched(containerId, false)
+    await this.storage.setContainerWatched(containerId, false)
   }
 
   isWatching(containerId: string): boolean {

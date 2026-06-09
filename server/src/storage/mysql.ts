@@ -31,9 +31,11 @@ export class MysqlStorage implements StorageAdapter {
           started_at DATETIME NOT NULL,
           stopped_at DATETIME NULL,
           status VARCHAR(20) NOT NULL DEFAULT 'running',
+          watched TINYINT NOT NULL DEFAULT 1,
           INDEX idx_ci_container (container_id)
         )
       `)
+      await conn.execute('ALTER TABLE container_instances ADD COLUMN IF NOT EXISTS watched TINYINT NOT NULL DEFAULT 1')
 
       await conn.execute(`
         CREATE TABLE IF NOT EXISTS log_entries (
@@ -179,6 +181,21 @@ export class MysqlStorage implements StorageAdapter {
     const row = (rows as any[])[0]
     if (!row) return null
     return { id: row.id, containerId: row.container_id, containerName: row.container_name, startedAt: row.started_at, stoppedAt: row.stopped_at, status: row.status }
+  }
+
+  async isContainerWatched(containerId: string): Promise<boolean> {
+    const [rows] = await this.pool.execute(
+      `SELECT watched FROM container_instances WHERE container_id = ? ORDER BY started_at DESC LIMIT 1`, [containerId],
+    ) as any
+    const row = (rows as any[])[0]
+    return row ? row.watched === 1 : true
+  }
+
+  async setContainerWatched(containerId: string, watched: boolean): Promise<void> {
+    await this.pool.execute(
+      `UPDATE container_instances SET watched = ? WHERE container_id = ?`,
+      [watched ? 1 : 0, containerId],
+    )
   }
 
   async getDistinctLevels(containerId: string): Promise<string[]> {

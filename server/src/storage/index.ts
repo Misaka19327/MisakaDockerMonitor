@@ -61,6 +61,8 @@ export interface StorageAdapter {
   stopInstance(instanceId: string): Promise<void>
   getInstances(containerId: string): Promise<ContainerInstance[]>
   getActiveInstance(containerId: string): Promise<ContainerInstance | null>
+  isContainerWatched(containerId: string): Promise<boolean>
+  setContainerWatched(containerId: string, watched: boolean): Promise<void>
   getDistinctLevels(containerId: string): Promise<string[]>
   getDistinctFieldValues(containerId: string, field: string): Promise<string[]>
   deleteLogsByInstance(instanceId: string): Promise<void>
