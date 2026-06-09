@@ -18,6 +18,10 @@ export class LogCollector {
   private storage: StorageAdapter
   private watched = new Map<string, WatchedContainer>()
   private eventStream: Readable | null = null
+  private logBuffer: import('./storage').LogEntry[] = []
+  private flushTimer: ReturnType<typeof setInterval> | null = null
+  private static readonly FLUSH_INTERVAL_MS = 1000
+  private static readonly FLUSH_THRESHOLD = 50
 
   constructor(storage: StorageAdapter) {
     this.storage = storage
@@ -49,6 +53,8 @@ export class LogCollector {
     } catch (err) {
       console.warn('Failed to list running containers (non-fatal):', toErrorMessage(err))
     }
+
+    this.flushTimer = setInterval(() => { void this.flushBuffer() }, LogCollector.FLUSH_INTERVAL_MS)
   }
 
   async watchContainer(containerId: string, containerName: string, forceNewInstance = false) {
@@ -123,7 +129,10 @@ export class LogCollector {
             watched.instanceId,
             watched.lineNumber,
           )
-          await this.storage.insertLog(entry)
+          this.logBuffer.push(entry)
+          if (this.logBuffer.length >= LogCollector.FLUSH_THRESHOLD) {
+            await this.flushBuffer()
+          }
         },
         onError: (err) => {
           console.error(`Log stream error for ${watched.containerName}:`, err.message)
@@ -162,7 +171,22 @@ export class LogCollector {
     }
   }
 
+  private async flushBuffer() {
+    if (this.logBuffer.length === 0) return
+    const batch = this.logBuffer.splice(0)
+    try {
+      await this.storage.insertLogs(batch)
+    } catch (err) {
+      console.error('[LogCollector] Failed to flush buffer:', err)
+    }
+  }
+
   async stop() {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer)
+      this.flushTimer = null
+    }
+    await this.flushBuffer()
     for (const [, watched] of this.watched) {
       watched.stream?.destroy()
       await this.storage.stopInstance(watched.instanceId)

@@ -1,17 +1,20 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { config } from '../config'
 import { ensureDataDir } from '../config'
-import { nowISO } from '../utils'
+import { nowISO, isSafeFieldName } from '../utils'
 import type { StorageAdapter, LogEntry, LogQueryParams, LogQueryResult, ContainerInstance, GroupResult } from './index'
 
 export class SqliteStorage implements StorageAdapter {
   private db!: Database
+  private insertStmt: any = null
 
   async initialize(): Promise<void> {
     ensureDataDir()
     this.db = new Database(config.sqlite.path)
-    this.db.run('PRAGMA journal_mode = WAL')
-    this.db.run('PRAGMA synchronous = NORMAL')
+    this.db.run(`PRAGMA journal_mode = ${config.sqlite.journalMode}`)
+    this.db.run(`PRAGMA synchronous = ${config.sqlite.synchronous}`)
+    this.db.run('PRAGMA busy_timeout = 5000')
+    this.db.run('PRAGMA wal_autocheckpoint = 1000')
     this.createTables()
   }
 
@@ -50,18 +53,20 @@ export class SqliteStorage implements StorageAdapter {
     this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_instance ON log_entries(instance_id)')
     this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_level ON log_entries(level)')
     this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON log_entries(timestamp)')
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_content ON log_entries(content)')
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_created_at ON log_entries(created_at)')
   }
 
   async insertLog(entry: LogEntry): Promise<void> {
-    this.db.run(
-      `INSERT INTO log_entries (container_id, container_name, instance_id, timestamp, line_number, raw_content, is_json, parsed_json, level, content, has_sql, sql, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
-        entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
-        entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt,
-      ],
+    if (!this.insertStmt) {
+      this.insertStmt = this.db.prepare(
+        `INSERT INTO log_entries (container_id, container_name, instance_id, timestamp, line_number, raw_content, is_json, parsed_json, level, content, has_sql, sql, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+    }
+    this.insertStmt.run(
+      entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
+      entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
+      entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt,
     )
   }
 
@@ -119,7 +124,14 @@ export class SqliteStorage implements StorageAdapter {
     }
   }
 
+  private validateField(field: string): void {
+    if (!isSafeFieldName(field)) {
+      throw new Error(`Invalid field name: ${field}`)
+    }
+  }
+
   async groupByField(containerId: string, field: string, instanceId?: string): Promise<GroupResult> {
+    this.validateField(field)
     let queryStr: string
     let values: SQLQueryBindings[]
 
@@ -183,6 +195,7 @@ export class SqliteStorage implements StorageAdapter {
   }
 
   async getDistinctFieldValues(containerId: string, field: string): Promise<string[]> {
+    this.validateField(field)
     const rows = this.db.query(
       `SELECT DISTINCT json_extract(parsed_json, '$.${field}') as val FROM log_entries
        WHERE container_id = ? AND is_json = 1 AND json_extract(parsed_json, '$.${field}') IS NOT NULL
@@ -216,6 +229,14 @@ export class SqliteStorage implements StorageAdapter {
       AND id NOT IN (SELECT DISTINCT instance_id FROM log_entries WHERE instance_id IS NOT NULL)
     `)
     return result.changes
+  }
+
+  async checkpoint(): Promise<void> {
+    this.db.run('PRAGMA wal_checkpoint(TRUNCATE)')
+  }
+
+  async vacuum(): Promise<void> {
+    this.db.run('VACUUM')
   }
 
   async close(): Promise<void> {

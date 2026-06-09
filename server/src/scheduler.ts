@@ -14,6 +14,9 @@ export function startCleanupScheduler(storage: StorageAdapter): () => void {
       const logCount = await storage.deleteLogsBefore(cutoff)
       const instanceCount = await storage.deleteStoppedInstancesWithNoLogs()
       console.log(`[Cleanup] Deleted ${logCount} log entries, ${instanceCount} empty stopped instances`)
+      await storage.checkpoint()
+      await storage.vacuum()
+      console.log('[Cleanup] Checkpoint and vacuum completed')
     } catch (err) {
       console.error('[Cleanup] Error during cleanup:', err)
     }

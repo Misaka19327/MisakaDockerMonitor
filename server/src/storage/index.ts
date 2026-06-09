@@ -67,6 +67,8 @@ export interface StorageAdapter {
   deleteLogsByContainer(containerId: string): Promise<void>
   deleteLogsBefore(cutoff: string): Promise<number>
   deleteStoppedInstancesWithNoLogs(): Promise<number>
+  checkpoint(): Promise<void>
+  vacuum(): Promise<void>
   close(): Promise<void>
 }
 

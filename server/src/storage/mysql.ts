@@ -1,6 +1,6 @@
 import mysql from 'mysql2/promise'
 import { config } from '../config'
-import { nowISO } from '../utils'
+import { nowISO, isSafeFieldName } from '../utils'
 import type { StorageAdapter, LogEntry, LogQueryParams, LogQueryResult, ContainerInstance, GroupResult } from './index'
 
 export class MysqlStorage implements StorageAdapter {
@@ -54,7 +54,8 @@ export class MysqlStorage implements StorageAdapter {
           INDEX idx_le_container (container_id),
           INDEX idx_le_instance (instance_id),
           INDEX idx_le_level (level),
-          INDEX idx_le_timestamp (timestamp)
+          INDEX idx_le_timestamp (timestamp),
+          INDEX idx_le_created_at (created_at)
         )
       `)
     } finally {
@@ -91,7 +92,7 @@ export class MysqlStorage implements StorageAdapter {
   }
 
   async queryLogs(params: LogQueryParams): Promise<LogQueryResult> {
-    const { containerId, instanceId, search, level, startTime, endTime, limit = 200, offset = 0 } = params
+    const { containerId, instanceId, search, level, startTime, endTime, field, fieldValue, limit = 200, offset = 0 } = params
 
     const conditions: string[] = ['container_id = ?']
     const values: any[] = [containerId]
@@ -101,6 +102,10 @@ export class MysqlStorage implements StorageAdapter {
     if (level) { conditions.push('level = ?'); values.push(level) }
     if (startTime) { conditions.push('timestamp >= ?'); values.push(startTime) }
     if (endTime) { conditions.push('timestamp <= ?'); values.push(endTime) }
+    if (field && fieldValue && field !== 'level') {
+      conditions.push('JSON_EXTRACT(parsed_json, ?) = ?')
+      values.push(`$.${field}`, fieldValue)
+    }
 
     const where = conditions.join(' AND ')
 
@@ -108,7 +113,7 @@ export class MysqlStorage implements StorageAdapter {
     const total = countRows[0]?.total ?? 0
 
     const [rows] = await this.pool.execute(
-      `SELECT * FROM log_entries WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM (SELECT * FROM log_entries WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?) AS sub ORDER BY id ASC`,
       [...values, String(limit), String(offset)],
     ) as any
 
@@ -120,6 +125,9 @@ export class MysqlStorage implements StorageAdapter {
   }
 
   async groupByField(containerId: string, field: string, instanceId?: string): Promise<GroupResult> {
+    if (!isSafeFieldName(field)) {
+      throw new Error(`Invalid field name: ${field}`)
+    }
     const conditions = ['container_id = ?', 'level IS NOT NULL']
     const values: any[] = [containerId]
     if (instanceId) { conditions.push('instance_id = ?'); values.push(instanceId) }
@@ -179,6 +187,9 @@ export class MysqlStorage implements StorageAdapter {
   }
 
   async getDistinctFieldValues(containerId: string, field: string): Promise<string[]> {
+    if (!isSafeFieldName(field)) {
+      throw new Error(`Invalid field name: ${field}`)
+    }
     const [rows] = await this.pool.execute(
       `SELECT DISTINCT JSON_EXTRACT(parsed_json, '$.${field}') as val FROM log_entries WHERE container_id = ? AND is_json = 1 AND JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL LIMIT 100`,
       [containerId],
@@ -216,6 +227,9 @@ export class MysqlStorage implements StorageAdapter {
   async close(): Promise<void> {
     await this.pool.end()
   }
+
+  async checkpoint(): Promise<void> {}
+  async vacuum(): Promise<void> {}
 
   private rowToEntry(row: any): LogEntry {
     return {

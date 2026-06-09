@@ -93,7 +93,7 @@ export class ClickHouseStorage implements StorageAdapter {
   }
 
   async queryLogs(params: LogQueryParams): Promise<LogQueryResult> {
-    const { containerId, instanceId, search, level, startTime, endTime, limit = 200, offset = 0 } = params
+    const { containerId, instanceId, search, level, startTime, endTime, field, fieldValue, limit = 200, offset = 0 } = params
 
     const escapedContainerId = escapeClickHouseString(containerId)
     const conditions: string[] = [`container_id = '${escapedContainerId}'`]
@@ -105,6 +105,10 @@ export class ClickHouseStorage implements StorageAdapter {
     if (level) conditions.push(`level = '${escapeClickHouseString(level)}'`)
     if (startTime) conditions.push(`timestamp >= '${escapeClickHouseString(startTime)}'`)
     if (endTime) conditions.push(`timestamp <= '${escapeClickHouseString(endTime)}'`)
+    if (field && fieldValue && field !== 'level') {
+      const safeField = assertSafeFieldName(field)
+      conditions.push(`JSONExtractString(parsed_json, '${safeField}') = '${escapeClickHouseString(fieldValue)}'`)
+    }
 
     const where = conditions.join(' AND ')
 
@@ -252,6 +256,9 @@ export class ClickHouseStorage implements StorageAdapter {
   async close(): Promise<void> {
     await this.client.close()
   }
+
+  async checkpoint(): Promise<void> {}
+  async vacuum(): Promise<void> {}
 
   private rowToEntry(row: any): LogEntry {
     return {
