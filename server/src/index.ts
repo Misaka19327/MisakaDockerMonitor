@@ -43,12 +43,11 @@ async function main() {
             alwaysStatic: process.env.NODE_ENV === 'production',
             silent: true,
         }))
-        .get('*', () => Bun.file(`${CLIENT_DIST}/index.html`))
         .onError(({code, error, set, request}) => {
             if (code === 'NOT_FOUND') {
                 const url = new URL(request.url)
                 if (!url.pathname.startsWith('/api/')) {
-                    return new Response(Bun.file(`${CLIENT_DIST}/index.html`))
+                    return Bun.file(`${CLIENT_DIST}/index.html`)
                 }
                 set.status = 404
                 return {error: 'Not Found'}

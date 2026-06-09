@@ -26,6 +26,7 @@ export interface Container {
   uptime?: string | null
   networks?: string[]
   restartPolicy?: string | null
+    env?: string[] | null
 }
 
 export interface LogEntry {

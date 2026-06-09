@@ -1,24 +1,40 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '../lib/api'
-import type { LogEntry, ContainerInstance } from '../types'
-import { useContainerStatusStream } from '../hooks/useContainerStatusStream'
-import { formatInstanceLabel } from '../lib/time'
-import { Button } from './ui/button'
-import { Input } from './ui/input'
-import { Badge } from './ui/badge'
-import { Select } from './ui/select'
-import { LogEntryView } from './LogEntry'
-import { GroupPanel } from './GroupPanel'
-import { InlineGroup } from './InlineGroup'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
+import {useNavigate, useParams} from 'react-router-dom'
+import {useQuery, useQueryClient} from '@tanstack/react-query'
+import {api} from '../lib/api'
+import type {LogEntry} from '../types'
+import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
+import {formatInstanceLabel} from '../lib/time'
+import {Button} from './ui/button'
+import {Input} from './ui/input'
+import {Badge} from './ui/badge'
+import {Select} from './ui/select'
+import {Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, DrawerTrigger,} from './ui/drawer'
+import {LogEntryView} from './LogEntry'
+import {GroupPanel} from './GroupPanel'
+import {InlineGroup} from './InlineGroup'
 import {
-  ArrowLeft, Search, RefreshCw,
-  Pause, Play, ArrowDown, ArrowUp,
-  ArrowUpDown, Group, ChevronDown, ChevronRight,
+  ArrowDown,
+  ArrowLeft,
   ArrowUp as ArrowUpIcon,
-  Heart, Hash, Clock, RotateCcw, Network, Shield,
-  Cpu, MemoryStick, HardDrive,
+  ArrowUpDown,
+  Braces,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Cpu,
+  Group,
+  HardDrive,
+  Hash,
+  Heart,
+  MemoryStick,
+  Network,
+  Pause,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Shield,
 } from 'lucide-react'
 
 export function LogViewer() {
@@ -39,6 +55,7 @@ export function LogViewer() {
   const [groupField, setGroupField] = useState('level')
   const [inlineGrouping, setInlineGrouping] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
+  const [envDrawerOpen, setEnvDrawerOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -234,6 +251,47 @@ export function LogViewer() {
               )}
             </div>
           </div>
+          <Drawer direction="right" open={envDrawerOpen} onOpenChange={setEnvDrawerOpen}>
+            <DrawerTrigger asChild>
+              <Button variant="ghost" size="sm" title="Environment Variables">
+                <Braces className="h-4 w-4"/>
+                Env
+              </Button>
+            </DrawerTrigger>
+            <DrawerContent>
+              <DrawerHeader>
+                <DrawerTitle>Environment Variables</DrawerTitle>
+                <DrawerDescription>
+                  {container?.name || containerId}
+                </DrawerDescription>
+              </DrawerHeader>
+              <div className="flex-1 overflow-auto px-4 pb-4">
+                {container?.env && container.env.length > 0 ? (
+                    <div className="space-y-1">
+                      {container.env.map((line, i) => {
+                        const eqIndex = line.indexOf('=')
+                        const key = eqIndex >= 0 ? line.slice(0, eqIndex) : line
+                        const value = eqIndex >= 0 ? line.slice(eqIndex + 1) : ''
+                        return (
+                            <div key={i}
+                                 className="group rounded-md border px-3 py-2 text-sm hover:bg-accent/50 transition-colors">
+                              <div className="font-mono text-xs font-medium text-foreground break-all">{key}</div>
+                              {value && (
+                                  <div
+                                      className="font-mono text-xs text-muted-foreground mt-0.5 break-all select-all">{value}</div>
+                              )}
+                            </div>
+                        )
+                      })}
+                    </div>
+                ) : (
+                    <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
+                      No environment variables found.
+                    </div>
+                )}
+              </div>
+            </DrawerContent>
+          </Drawer>
           <Badge variant={container?.state === 'running' ? 'success' : 'soft-destructive'}>
             {container?.state || 'unknown'}
           </Badge>
