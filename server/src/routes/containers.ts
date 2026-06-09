@@ -7,7 +7,7 @@ import {formatBytes, formatUptime} from '../utils'
 
 export function containerRoutes(deps: { storage: StorageAdapter; collector: LogCollector }) {
   const {storage, collector} = deps
-
+  
   return new Elysia({prefix: '/api/containers'})
       .use(authGuard)
       .get('/', async () => {
@@ -41,7 +41,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
         const info = await getContainer(params.id)
         const state = info.State
         const uptime = state?.StartedAt ? formatUptime(state.StartedAt) : null
-
+        
         let stats: ReturnType<typeof extractStats> = null
         if (state?.Running) {
           try {
@@ -50,7 +50,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           } catch { /* stats not available */
           }
         }
-
+        
         return {
           id: info.Id,
           name: info.Name?.replace(/^\//, ''),
@@ -111,14 +111,14 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
 
 function extractStats(stats: any, info: any) {
   if (!stats && !info?.State?.StartedAt) return null
-
+  
   let cpuPercent: number | null = null
   let memUsage: string | null = null
   let memPercent: number | null = null
   let diskRead: string | null = null
   let diskWrite: string | null = null
   let uptime: string | null = null
-
+  
   if (stats) {
     try {
       const cpuDelta = (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) - (stats.precpu_stats?.cpu_usage?.total_usage ?? 0)
@@ -127,14 +127,14 @@ function extractStats(stats: any, info: any) {
       if (systemDelta > 0 && cpuDelta > 0) {
         cpuPercent = Math.round((cpuDelta / systemDelta) * numCpus * 10000) / 100
       }
-
+      
       const memUsed = stats.memory_stats?.usage ?? 0
       const memLimit = stats.memory_stats?.limit ?? 0
       if (memUsed > 0) {
         memUsage = formatBytes(memUsed)
         memPercent = memLimit > 0 ? Math.round((memUsed / memLimit) * 10000) / 100 : null
       }
-
+      
       const ioStats = stats.blkio_stats?.io_service_bytes_recursive
       if (ioStats && ioStats.length > 0) {
         let totalRead = 0, totalWrite = 0
@@ -148,11 +148,11 @@ function extractStats(stats: any, info: any) {
     } catch { /* ignore parse errors */
     }
   }
-
+  
   if (info?.State?.StartedAt) {
     uptime = formatUptime(info.State.StartedAt)
   }
-
+  
   return (cpuPercent !== null || memUsage !== null || uptime !== null)
       ? {cpuPercent, memUsage, memPercent, diskRead, diskWrite, uptime}
       : null

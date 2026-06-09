@@ -48,72 +48,72 @@ export interface LogStreamOptions {
 export async function streamContainerLogs(opts: LogStreamOptions) {
   const d = getDocker()
   const container = d.getContainer(opts.containerId)
-
+  
   const streamOpts: Docker.ContainerLogsOptions = {
     stdout: true,
     stderr: true,
     timestamps: false,
     tail: opts.tail ?? 0,
   }
-
+  
   if (opts.since) {
     streamOpts.since = opts.since
   }
-
+  
   const stream: Readable =
       opts.follow === false
           ? Readable.from([await container.logs({...streamOpts, follow: false})])
           : await container.logs({...streamOpts, follow: true}) as unknown as Readable
-
+  
   // Use dockerode's built-in demuxStream to properly separate headers
   const stdout = new PassThrough()
   const stderr = new PassThrough()
-
+  
   // Demux the Docker stream (strips 8-byte headers)
   container.modem.demuxStream(stream, stdout, stderr)
-
+  
   let stdoutBuffer = ''
   let stderrBuffer = ''
-
+  
   const handleData = (chunk: Buffer, buffer: string) => {
     const text = chunk.toString('utf-8')
     const lines = `${buffer}${text}`.split('\n')
     const remainder = lines.pop() ?? ''
-
+    
     for (const line of lines) {
       const normalized = line.endsWith('\r') ? line.slice(0, -1) : line
       if (normalized.length > 0) {
         opts.onLog(normalized)
       }
     }
-
+    
     return remainder
   }
-
+  
   const flushBuffer = (buffer: string) => {
     const normalized = buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer
     if (normalized.length > 0) {
       opts.onLog(normalized)
     }
   }
-
+  
   stdout.on('data', (chunk: Buffer) => {
     stdoutBuffer = handleData(chunk, stdoutBuffer)
   })
   stderr.on('data', (chunk: Buffer) => {
     stderrBuffer = handleData(chunk, stderrBuffer)
   })
-
+  
   stream.on('error', (err: Error) => {
     opts.onError?.(err)
   })
-
+  
   stream.on('end', () => {
     flushBuffer(stdoutBuffer)
     flushBuffer(stderrBuffer)
     opts.onEnd?.()
   })
-
+  
   return stream
 }
 
@@ -123,18 +123,18 @@ export async function watchContainerEvents(onEvent: (event: {
   containerName: string
 }) => void) {
   const d = getDocker()
-
+  
   const stream = await d.getEvents({filters: {event: ['start', 'die', 'restart']}}) as unknown as Readable
   let buffer = ''
-
+  
   stream.on('data', (chunk: Buffer) => {
     buffer += chunk.toString('utf-8')
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
-
+    
     for (const line of lines) {
       if (!line.trim()) continue
-
+      
       try {
         const evt = JSON.parse(line)
         const containerId = evt.Actor?.ID
@@ -151,6 +151,6 @@ export async function watchContainerEvents(onEvent: (event: {
       }
     }
   })
-
+  
   return stream
 }
