@@ -91,28 +91,38 @@ export class MysqlStorage implements StorageAdapter {
     }
 
     async insertLogs(entries: LogEntry[]): Promise<void> {
-        const conn = await this.pool.getConnection()
-        try {
-            await conn.beginTransaction()
-            for (const entry of entries) {
-                const [result] = await conn.execute(
-                    `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp,
-                                              line_number,
-                                              raw_content, is_json, parsed_json, level, content, has_sql, sql_text,
-                                              created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
-                        entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
-                        entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
-                ) as any
-                entry.id = Number(result.insertId)
+        if (entries.length === 0) return
+
+        const placeholders = entries.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')
+        const values = entries.flatMap(entry => [
+            entry.serviceUuid,
+            entry.containerId,
+            entry.containerName,
+            entry.instanceId,
+            entry.timestamp,
+            entry.lineNumber,
+            entry.rawContent,
+            entry.isJson ? 1 : 0,
+            entry.parsedJson,
+            entry.level,
+            entry.content,
+            entry.hasSql ? 1 : 0,
+            entry.sql,
+            entry.createdAt,
+        ])
+
+        const [result] = await this.pool.execute(
+            `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp, line_number,
+                                      raw_content, is_json, parsed_json, level, content, has_sql, sql_text, created_at)
+             VALUES ${placeholders}`,
+            values,
+        ) as any
+
+        const firstInsertId = Number(result.insertId)
+        if (Number.isFinite(firstInsertId) && firstInsertId > 0) {
+            for (let index = 0; index < entries.length; index++) {
+                entries[index].id = firstInsertId + index
             }
-            await conn.commit()
-        } catch (e) {
-            await conn.rollback()
-            throw e
-        } finally {
-            conn.release()
         }
     }
 

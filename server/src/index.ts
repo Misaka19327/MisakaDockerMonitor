@@ -9,6 +9,7 @@ import {cleanupPlugin} from './scheduler'
 import {authRoutes} from './routes/auth'
 import {configRoutes} from './routes/config'
 import {containerRoutes} from './routes/containers'
+import {debugRoutes} from './routes/debug'
 import {logRoutes} from './routes/logs'
 import {toErrorMessage} from './utils'
 
@@ -35,6 +36,7 @@ async function main() {
         .use(configRoutes())
         .use(authRoutes())
         .use(containerRoutes(deps))
+        .use(debugRoutes(deps))
         .use(logRoutes(deps))
         .use(await staticPlugin({
             assets: CLIENT_DIST,

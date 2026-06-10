@@ -1,9 +1,9 @@
 import {Elysia, t} from 'elysia'
 import {authGuard} from '../plugins/auth-guard'
-import {getContainer, getContainerStats} from '../docker'
+import {getContainer} from '../docker'
 import type {LogCollector} from '../log-collector'
 import type {StorageAdapter} from '../storage'
-import {formatBytes, formatUptime, isSafeFieldName, parseInteger} from '../utils'
+import {formatUptime, isSafeFieldName, parseInteger} from '../utils'
 
 export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollector }) {
     const {storage, collector} = deps
@@ -117,9 +117,10 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                     }
                     
                     // Subscribe to real-time log push from LogCollector
-                    unsubscribe = collector.onLog((entry) => {
-                        if (entry.serviceUuid === serviceUuid) {
-                            sendEvent(entry)
+                    unsubscribe = collector.onEntries((entries) => {
+                        const matched = entries.filter(entry => entry.serviceUuid === serviceUuid)
+                        if (matched.length > 0) {
+                            sendEvent(matched)
                         }
                     })
 
@@ -165,43 +166,6 @@ async function getContainerDetail(containerId: string, collector: { isWatching: 
     const state = info.State
     const uptime = state?.StartedAt ? formatUptime(state.StartedAt) : null
     
-    let cpuPercent: number | null = null
-    let memUsage: string | null = null
-    let memPercent: number | null = null
-    let diskRead: string | null = null
-    let diskWrite: string | null = null
-    
-    if (state?.Running) {
-        try {
-            const stats = await getContainerStats(containerId)
-            if (stats) {
-                const cpuDelta = (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) - (stats.precpu_stats?.cpu_usage?.total_usage ?? 0)
-                const systemDelta = (stats.cpu_stats?.system_cpu_usage ?? 0) - (stats.precpu_stats?.system_cpu_usage ?? 0)
-                const numCpus = stats.cpu_stats?.online_cpus ?? 1
-                if (systemDelta > 0 && cpuDelta > 0) {
-                    cpuPercent = Math.round((cpuDelta / systemDelta) * numCpus * 10000) / 100
-                }
-                const memUsed = stats.memory_stats?.usage ?? 0
-                const memLimit = stats.memory_stats?.limit ?? 0
-                if (memUsed > 0) {
-                    memUsage = formatBytes(memUsed)
-                    memPercent = memLimit > 0 ? Math.round((memUsed / memLimit) * 10000) / 100 : null
-                }
-                const ioStats = stats.blkio_stats?.io_service_bytes_recursive
-                if (ioStats && ioStats.length > 0) {
-                    let totalRead = 0, totalWrite = 0
-                    for (const entry of ioStats) {
-                        if (entry.op === 'read') totalRead += entry.value ?? 0
-                        if (entry.op === 'write') totalWrite += entry.value ?? 0
-                    }
-                    if (totalRead > 0) diskRead = formatBytes(totalRead)
-                    if (totalWrite > 0) diskWrite = formatBytes(totalWrite)
-                }
-            }
-        } catch {
-        }
-    }
-    
     return {
         id: info.Id,
         dockerId: info.Id,
@@ -222,8 +186,6 @@ async function getContainerDetail(containerId: string, collector: { isWatching: 
         uptime,
         networks: Object.keys(info.NetworkSettings?.Networks || {}),
         restartPolicy: info.HostConfig?.RestartPolicy?.Name ?? null,
-        stats: cpuPercent !== null || memUsage !== null ? {
-            cpuPercent, memUsage, memPercent, diskRead, diskWrite, uptime,
-        } : null,
+        stats: null,
     }
 }

@@ -14,43 +14,30 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .use(authGuard)
       .get('/', async () => {
         const containers = await listContainers(true) as any[]
-        const running = containers.filter((c: any) => c.State === 'running')
-        const statsMap: Record<string, any> = {}
-        const infoMap: Record<string, any> = {}
-        await Promise.all(running.map(async (c: any) => {
+        const results = []
+        for (const c of containers) {
+            const name = c.Names?.[0]?.replace(/^\//, '') || ''
+            const labels: Record<string, string> = c.Labels || {}
+            let serviceUuid = ''
             try {
-                statsMap[c.Id] = await getContainerStats(c.Id)
+                serviceUuid = await resolver.resolve(labels, name)
             } catch {
             }
-            try {
-                infoMap[c.Id] = await getContainer(c.Id)
-            } catch {
-            }
-        }))
-          
-          const results = []
-          for (const c of containers) {
-              const name = c.Names?.[0]?.replace(/^\//, '') || ''
-              const labels: Record<string, string> = c.Labels || {}
-              let serviceUuid = ''
-          try {
-              serviceUuid = await resolver.resolve(labels, name)
-          } catch {
-          }
-              results.push({
-                  id: serviceUuid,
-                  dockerId: c.Id,
-                  name,
-                  image: c.Image,
-                  state: c.State,
-                  status: c.Status,
-                  created: c.Created,
-                  ports: c.Ports,
-                  watched: collector.isWatching(c.Id),
-                  stats: extractStats(statsMap[c.Id], infoMap[c.Id]),
-              })
-          }
-          return results
+
+            results.push({
+                id: serviceUuid,
+                dockerId: c.Id,
+                name,
+                image: c.Image,
+                state: c.State,
+                status: c.Status,
+                created: c.Created,
+                ports: c.Ports,
+                watched: collector.isWatching(c.Id),
+                stats: null,
+            })
+        }
+        return results
       })
       .get('/:uuid', async ({params}) => {
           const containerId = await resolveContainerId(params.uuid, storage)

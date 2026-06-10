@@ -4,12 +4,12 @@ import type {LogEntry} from '../types'
 export function useContainerStatusStream(
     serviceUuid: string | undefined,
     onStatus?: (data: Record<string, unknown>) => void,
-    onLogEntry?: (entry: LogEntry) => void,
+    onLogEntries?: (entries: LogEntry[]) => void,
 ) {
     const onStatusRef = useRef(onStatus)
     onStatusRef.current = onStatus
-    const onLogEntryRef = useRef(onLogEntry)
-    onLogEntryRef.current = onLogEntry
+    const onLogEntriesRef = useRef(onLogEntries)
+    onLogEntriesRef.current = onLogEntries
 
     useEffect(() => {
         if (!serviceUuid) return
@@ -28,8 +28,9 @@ export function useContainerStatusStream(
         
         es.onmessage = (e: MessageEvent) => {
             try {
-                const entry = JSON.parse(e.data)
-                onLogEntryRef.current?.(entry)
+                const payload = JSON.parse(e.data)
+                const entries = Array.isArray(payload) ? payload : [payload]
+                onLogEntriesRef.current?.(entries)
             } catch {
             }
         }

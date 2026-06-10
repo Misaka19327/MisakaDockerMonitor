@@ -71,7 +71,7 @@ export function Dashboard() {
     const {data: containers, isLoading, refetch} = useQuery({
         queryKey: ['containers'],
         queryFn: () => api.containers.list(),
-        refetchInterval: 10000,
+        refetchInterval: 15000,
     })
     
     const watchMutation = useMutation({

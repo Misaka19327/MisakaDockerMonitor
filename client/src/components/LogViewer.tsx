@@ -37,6 +37,8 @@ import {
     Shield,
 } from 'lucide-react'
 
+const MAX_PUSHED_ENTRIES = 2000
+
 export function LogViewer() {
     const {id: serviceUuid} = useParams<{ id: string }>()
     const navigate = useNavigate()
@@ -70,15 +72,24 @@ export function LogViewer() {
         useCallback((data: Record<string, unknown>) => {
             setSseStatus(data as Partial<Container>)
         }, []),
-        useCallback((entry: LogEntry) => {
-            if (entry.id != null) {
-                setPushedEntries(prev => {
-                    if (prev.has(entry.id!)) return prev
-                    const next = new Map(prev)
-                    next.set(entry.id!, entry)
-                    return next
-                })
-            }
+        useCallback((entries: LogEntry[]) => {
+            if (entries.length === 0) return
+
+            setPushedEntries(prev => {
+                const next = new Map(prev)
+                for (const entry of entries) {
+                    if (entry.id == null || next.has(entry.id)) continue
+                    next.set(entry.id, entry)
+                }
+
+                while (next.size > MAX_PUSHED_ENTRIES) {
+                    const oldestKey = next.keys().next().value
+                    if (oldestKey == null) break
+                    next.delete(oldestKey)
+                }
+
+                return next
+            })
         }, []),
     )
     
@@ -337,6 +348,7 @@ export function LogViewer() {
                 </div>)}
                 <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
                     <span>{logResult?.total ?? 0} log entries</span>
+                    <span>Live window: {pushedEntries.size}</span>
                     {search && <span>Filtered by: "{search}"</span>}
                     {level && <span>Level: {level}</span>}
                 </div>
