@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useNavigate, useParams} from 'react-router-dom'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import {api} from '../lib/api'
+import {markContainerOpened} from '../lib/container-preferences'
 import type {Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {formatInstanceLabel} from '../lib/time'
@@ -104,6 +105,11 @@ export function LogViewer() {
     })
 
     const prevInstancesRef = useRef<import('../types').ContainerInstance[]>([])
+    useEffect(() => {
+        if (!serviceUuid) return
+        markContainerOpened(serviceUuid)
+    }, [serviceUuid])
+
     useEffect(() => {
         if (!instances) return
         const prevInstances = prevInstancesRef.current

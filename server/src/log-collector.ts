@@ -6,7 +6,9 @@ import {ServiceResolver} from './service-resolver'
 import {config} from './config'
 import {nowISO, toErrorMessage} from './utils'
 import type {WriterInboundMessage, WriterOutboundMessage} from './log-writer-protocol'
+import type {ParseCandidate, ParserInboundMessage, ParserOutboundMessage} from './log-parser-protocol'
 import {rawLogToEntry} from './storage'
+import type {StorageWorkerEnv} from './storage-worker-env'
 
 interface WatchedContainer {
     containerId: string
@@ -34,6 +36,16 @@ interface PendingWriteBatch {
     entries: import('./storage').LogEntry[]
 }
 
+interface PendingParseBatch {
+    batchId: number
+    entries: ParseCandidate[]
+}
+
+interface PendingBackfillBatch {
+    batchId: number
+    patches: import('./storage').ParsedLogPatch[]
+}
+
 export interface CollectorStats {
     startedAt: string
     watchedContainers: number
@@ -43,11 +55,22 @@ export interface CollectorStats {
     queuedWriteEntries: number
     maxQueuedWriteEntries: number
     pendingWriteBatches: number
+    queuedParseEntries: number
+    maxQueuedParseEntries: number
+    pendingParseBatches: number
+    queuedBackfillEntries: number
+    maxQueuedBackfillEntries: number
+    pendingBackfillBatches: number
+    parseMode: 'active' | 'degraded'
+    droppedParseEntries: number
     totalLinesReceived: number
     totalEntriesInserted: number
+    totalEntriesParsed: number
     totalEntriesBroadcast: number
     totalFlushes: number
     totalFlushErrors: number
+    totalParseBatches: number
+    totalParseErrors: number
     lastFlushStartedAt: string | null
     lastFlushFinishedAt: string | null
     lastFlushDurationMs: number | null
@@ -58,6 +81,13 @@ export class LogCollector {
     private static readonly FLUSH_THRESHOLD = 500
     private static readonly MAX_FLUSH_BATCH_SIZE = 1000
     private static readonly MAX_BUFFER_ENTRIES = 20000
+    private static readonly MAX_PARSE_BATCH_SIZE = 500
+    private static readonly MAX_PARSE_QUEUE_ENTRIES = 10000
+    private static readonly MAX_BACKFILL_QUEUE_ENTRIES = 10000
+    private static readonly PARSE_DEGRADE_WRITE_THRESHOLD = 15000
+    private static readonly PARSE_RECOVER_WRITE_THRESHOLD = 5000
+    private static readonly PARSE_DEGRADE_BUFFER_THRESHOLD = 5000
+    private static readonly PARSE_RECOVER_BUFFER_THRESHOLD = 1000
     private static readonly RESUME_DEBOUNCE_MS = 1500
     private storage: StorageAdapter
     private resolver: ServiceResolver
@@ -79,6 +109,23 @@ export class LogCollector {
     private rejectWriterReady: ((reason?: unknown) => void) | null = null
     private writerClosed: Promise<void> | null = null
     private resolveWriterClosed: (() => void) | null = null
+    private parser: Worker | null = null
+    private parserReady: Promise<void> | null = null
+    private resolveParserReady: (() => void) | null = null
+    private rejectParserReady: ((reason?: unknown) => void) | null = null
+    private parserClosed: Promise<void> | null = null
+    private resolveParserClosed: (() => void) | null = null
+    private pendingParseBatches: PendingParseBatch[] = []
+    private inFlightParseBatch: PendingParseBatch | null = null
+    private pendingBackfillBatches: PendingBackfillBatch[] = []
+    private inFlightBackfillBatch: PendingBackfillBatch | null = null
+    private nextBackfillBatchId = 1_000_000_000
+    private nextParseBatchId = 1
+    private queuedParseEntries = 0
+    private maxQueuedParseEntries = 0
+    private queuedBackfillEntries = 0
+    private maxQueuedBackfillEntries = 0
+    private parseMode: 'active' | 'degraded' = 'active'
     private pendingResumeTimers = new Map<string, ReturnType<typeof setTimeout>>()
     private pendingResumeEvents = new Map<string, DockerEvent>()
     private readonly stats: CollectorStats = {
@@ -90,11 +137,22 @@ export class LogCollector {
         queuedWriteEntries: 0,
         maxQueuedWriteEntries: 0,
         pendingWriteBatches: 0,
+        queuedParseEntries: 0,
+        maxQueuedParseEntries: 0,
+        pendingParseBatches: 0,
+        queuedBackfillEntries: 0,
+        maxQueuedBackfillEntries: 0,
+        pendingBackfillBatches: 0,
+        parseMode: 'active',
+        droppedParseEntries: 0,
         totalLinesReceived: 0,
         totalEntriesInserted: 0,
+        totalEntriesParsed: 0,
         totalEntriesBroadcast: 0,
         totalFlushes: 0,
         totalFlushErrors: 0,
+        totalParseBatches: 0,
+        totalParseErrors: 0,
         lastFlushStartedAt: null,
         lastFlushFinishedAt: null,
         lastFlushDurationMs: null,
@@ -108,6 +166,7 @@ export class LogCollector {
     
     async start() {
         await this.startWriter()
+        await this.startParser()
 
         try {
             this.eventStream = await watchContainerEvents((event) => {
@@ -117,35 +176,37 @@ export class LogCollector {
         } catch (err) {
             console.warn('Failed to watch Docker events (non-fatal):', toErrorMessage(err))
         }
-        
+
         try {
             const containers = await listContainers(false)
+            let resumedCount = 0
             for (const container of containers) {
                 const name = container.Names?.[0]?.replace(/^\//, '') || container.Id
                 const labels: Record<string, string> = container.Labels || {}
-                
                 let serviceUuid: string
+
                 try {
                     serviceUuid = await this.resolver.resolve(labels, name)
                 } catch (err) {
                     console.warn(`Failed to resolve service for ${name}:`, toErrorMessage(err))
                     continue
                 }
-                
+
                 if (!(await this.storage.isContainerWatched(serviceUuid))) {
-                    console.log(`Skipping auto-watch for container: ${name} (previously unwatched)`)
                     continue
                 }
+
                 try {
                     await this.watchContainer(container.Id, name, serviceUuid)
-                    console.log(`Auto-watching container: ${name}`)
+                    resumedCount++
                 } catch (err) {
-                    console.warn(`Failed to auto-watch container ${name}:`, toErrorMessage(err))
+                    console.warn(`Failed to resume watching container ${name}:`, toErrorMessage(err))
                 }
             }
-            console.log(`Auto-discovered ${containers.length} running containers`)
+            console.log(`Discovered ${containers.length} running containers`)
+            console.log(`Restored monitoring for ${resumedCount} running containers`)
         } catch (err) {
-            console.warn('Failed to list running containers (non-fatal):', toErrorMessage(err))
+            console.warn('Failed to scan running containers (non-fatal):', toErrorMessage(err))
         }
         
         this.flushTimer = setInterval(() => {
@@ -223,6 +284,13 @@ export class LogCollector {
             queuedWriteEntries: this.queuedWriteEntries,
             maxQueuedWriteEntries: this.maxQueuedWriteEntries,
             pendingWriteBatches: this.pendingWriteBatches.length + (this.inFlightWriteBatch ? 1 : 0),
+            queuedParseEntries: this.queuedParseEntries,
+            maxQueuedParseEntries: this.maxQueuedParseEntries,
+            pendingParseBatches: this.pendingParseBatches.length + (this.inFlightParseBatch ? 1 : 0),
+            queuedBackfillEntries: this.queuedBackfillEntries,
+            maxQueuedBackfillEntries: this.maxQueuedBackfillEntries,
+            pendingBackfillBatches: this.pendingBackfillBatches.length + (this.inFlightBackfillBatch ? 1 : 0),
+            parseMode: this.parseMode,
         }
     }
     
@@ -244,12 +312,15 @@ export class LogCollector {
         this.pendingResumeEvents.clear()
         await this.requestFlush()
         await this.drainWriterQueue()
+        await this.drainParserQueue()
+        await this.drainWriterQueue()
         for (const [, watched] of this.watched) {
             watched.stream?.destroy()
             await this.storage.stopInstance(watched.instanceId)
         }
         this.watched.clear()
         this.eventStream?.destroy()
+        await this.stopParser()
         await this.stopWriter()
     }
     
@@ -403,7 +474,8 @@ export class LogCollector {
         if (this.queuedWriteEntries > this.maxQueuedWriteEntries) {
             this.maxQueuedWriteEntries = this.queuedWriteEntries
         }
-        void this.dispatchNextWriteBatch()
+        this.refreshParseMode()
+        void this.dispatchNextWriterJob()
     }
 
     private captureBufferWatermark() {
@@ -430,6 +502,7 @@ export class LogCollector {
             console.error('[LogCollector] Writer worker error:', message)
             this.rejectWriterReady?.(new Error(message))
         }
+        this.writer.postMessage({type: 'init', env: this.buildWorkerEnv()} satisfies WriterInboundMessage)
 
         await this.writerReady
     }
@@ -450,8 +523,45 @@ export class LogCollector {
         this.resolveWriterClosed = null
     }
 
-    private async dispatchNextWriteBatch() {
-        if (!this.writer || this.inFlightWriteBatch || this.pendingWriteBatches.length === 0) {
+    private async startParser() {
+        this.parserReady = new Promise<void>((resolve, reject) => {
+            this.resolveParserReady = resolve
+            this.rejectParserReady = reject
+        })
+        this.parserClosed = new Promise<void>((resolve) => {
+            this.resolveParserClosed = resolve
+        })
+
+        this.parser = new Worker(new URL('./log-parser-worker.ts', import.meta.url).href, {type: 'module'})
+        this.parser.onmessage = (event: MessageEvent<ParserOutboundMessage>) => {
+            void this.handleParserMessage(event.data)
+        }
+        this.parser.onerror = (event: ErrorEvent) => {
+            const message = event.message || 'Parser worker failed'
+            console.error('[LogCollector] Parser worker error:', message)
+            this.rejectParserReady?.(new Error(message))
+        }
+        await this.parserReady
+    }
+
+    private async stopParser() {
+        if (!this.parser) {
+            return
+        }
+
+        this.parser.postMessage({type: 'close'} satisfies ParserInboundMessage)
+        await this.parserClosed
+        this.parser.terminate()
+        this.parser = null
+        this.parserReady = null
+        this.parserClosed = null
+        this.resolveParserReady = null
+        this.rejectParserReady = null
+        this.resolveParserClosed = null
+    }
+
+    private async dispatchNextWriterJob() {
+        if (!this.writer || this.inFlightWriteBatch || this.inFlightBackfillBatch) {
             return
         }
 
@@ -460,16 +570,27 @@ export class LogCollector {
         }
 
         const batch = this.pendingWriteBatches.shift()
-        if (!batch || !this.writer) {
+        if (batch && this.writer) {
+            this.inFlightWriteBatch = batch
+            this.stats.lastFlushStartedAt = nowISO()
+            this.writer.postMessage({
+                type: 'write',
+                batchId: batch.batchId,
+                entries: batch.entries,
+            } satisfies WriterInboundMessage)
             return
         }
 
-        this.inFlightWriteBatch = batch
-        this.stats.lastFlushStartedAt = nowISO()
+        const backfillBatch = this.pendingBackfillBatches.shift()
+        if (!backfillBatch || !this.writer) {
+            return
+        }
+
+        this.inFlightBackfillBatch = backfillBatch
         this.writer.postMessage({
-            type: 'write',
-            batchId: batch.batchId,
-            entries: batch.entries,
+            type: 'backfill',
+            batchId: backfillBatch.batchId,
+            patches: backfillBatch.patches,
         } satisfies WriterInboundMessage)
     }
 
@@ -493,40 +614,258 @@ export class LogCollector {
             return
         }
 
-        const batch = this.inFlightWriteBatch
+        const writeBatch = this.inFlightWriteBatch
+        if (writeBatch && writeBatch.batchId === message.batchId) {
+            this.inFlightWriteBatch = null
+            this.stats.lastFlushFinishedAt = nowISO()
+
+            if (message.type === 'write-error') {
+                this.stats.totalFlushErrors++
+                this.stats.lastFlushDurationMs = null
+                console.error('[LogCollector] Failed to write batch:', message.error)
+                this.pendingWriteBatches.unshift(writeBatch)
+                await Bun.sleep(250)
+                await this.dispatchNextWriterJob()
+                return
+            }
+
+            if (message.type !== 'written') {
+                return
+            }
+
+            this.queuedWriteEntries = Math.max(0, this.queuedWriteEntries - message.entries.length)
+            this.stats.totalFlushes++
+            this.stats.totalEntriesInserted += message.entries.length
+            this.stats.totalEntriesBroadcast += message.entries.length
+            this.refreshParseMode()
+            this.queueParseEntries(message.entries)
+            this.stats.lastFlushDurationMs = writeBatch.entries.length > 0 && this.stats.lastFlushStartedAt
+                ? Math.round((Date.now() - new Date(this.stats.lastFlushStartedAt).getTime()) * 100) / 100
+                : null
+            this.emitter.emit('entries', message.entries)
+
+            await this.dispatchNextWriterJob()
+            return
+        }
+
+        const backfillBatch = this.inFlightBackfillBatch
+        if (!backfillBatch || backfillBatch.batchId !== message.batchId) {
+            return
+        }
+
+        this.inFlightBackfillBatch = null
+
+        if (message.type === 'backfill-error') {
+            this.queuedBackfillEntries = Math.max(0, this.queuedBackfillEntries - backfillBatch.patches.length)
+            this.stats.totalParseErrors++
+            this.stats.droppedParseEntries += backfillBatch.patches.length
+            console.error('[LogCollector] Failed to backfill parsed batch:', message.error)
+            this.refreshParseMode()
+            await this.dispatchNextWriterJob()
+            return
+        }
+
+        if (message.type !== 'backfilled') {
+            return
+        }
+
+        this.queuedBackfillEntries = Math.max(0, this.queuedBackfillEntries - backfillBatch.patches.length)
+        this.refreshParseMode()
+        await this.dispatchNextWriterJob()
+    }
+
+    private async drainWriterQueue() {
+        while (
+            this.pendingWriteBatches.length > 0
+            || this.pendingBackfillBatches.length > 0
+            || this.inFlightWriteBatch
+            || this.inFlightBackfillBatch
+        ) {
+            await Bun.sleep(50)
+        }
+    }
+
+    private queueParseEntries(entries: import('./storage').LogEntry[]) {
+        const candidates = entries
+            .filter((entry) => entry.id != null && this.shouldAsyncParse(entry.rawContent))
+            .map((entry) => ({id: entry.id!, rawContent: entry.rawContent}))
+
+        if (candidates.length === 0) {
+            return
+        }
+
+        this.refreshParseMode()
+        if (this.parseMode === 'degraded') {
+            this.stats.droppedParseEntries += candidates.length
+            return
+        }
+
+        for (let index = 0; index < candidates.length; index += LogCollector.MAX_PARSE_BATCH_SIZE) {
+            const batchEntries = candidates.slice(index, index + LogCollector.MAX_PARSE_BATCH_SIZE)
+            if (this.queuedParseEntries + batchEntries.length > LogCollector.MAX_PARSE_QUEUE_ENTRIES) {
+                this.parseMode = 'degraded'
+                this.stats.droppedParseEntries += candidates.length - index
+                this.stats.parseMode = this.parseMode
+                return
+            }
+
+            this.pendingParseBatches.push({
+                batchId: this.nextParseBatchId++,
+                entries: batchEntries,
+            })
+            this.queuedParseEntries += batchEntries.length
+            if (this.queuedParseEntries > this.maxQueuedParseEntries) {
+                this.maxQueuedParseEntries = this.queuedParseEntries
+            }
+        }
+
+        this.refreshParseMode()
+        void this.dispatchNextParseBatch()
+    }
+
+    private shouldAsyncParse(rawContent: string): boolean {
+        const trimmed = rawContent.trimStart()
+        return trimmed.startsWith('{')
+    }
+
+    private buildWorkerEnv(): StorageWorkerEnv {
+        return {
+            STORAGE_TYPE: config.storageType,
+            SQLITE_PATH: config.sqlite.path,
+            SQLITE_JOURNAL_MODE: config.sqlite.journalMode,
+            SQLITE_SYNCHRONOUS: config.sqlite.synchronous,
+            MYSQL_HOST: config.mysql.host,
+            MYSQL_PORT: String(config.mysql.port),
+            MYSQL_USER: config.mysql.user,
+            MYSQL_PASSWORD: config.mysql.password,
+            MYSQL_DATABASE: config.mysql.database,
+            CLICKHOUSE_HOST: config.clickhouse.host,
+            CLICKHOUSE_DATABASE: config.clickhouse.database,
+            CLICKHOUSE_USER: config.clickhouse.user,
+            CLICKHOUSE_PASSWORD: config.clickhouse.password,
+            TIMEZONE: config.timezone,
+            TZ: config.timezone,
+        }
+    }
+
+    private refreshParseMode() {
+        const shouldDegrade =
+            this.queuedWriteEntries >= LogCollector.PARSE_DEGRADE_WRITE_THRESHOLD
+            || this.logBuffer.length >= LogCollector.PARSE_DEGRADE_BUFFER_THRESHOLD
+            || this.queuedParseEntries >= LogCollector.MAX_PARSE_QUEUE_ENTRIES
+            || this.queuedBackfillEntries >= LogCollector.MAX_BACKFILL_QUEUE_ENTRIES
+
+        if (shouldDegrade) {
+            this.parseMode = 'degraded'
+        } else if (
+            this.parseMode === 'degraded'
+            && this.queuedWriteEntries <= LogCollector.PARSE_RECOVER_WRITE_THRESHOLD
+            && this.logBuffer.length <= LogCollector.PARSE_RECOVER_BUFFER_THRESHOLD
+            && this.queuedParseEntries < Math.floor(LogCollector.MAX_PARSE_QUEUE_ENTRIES / 2)
+            && this.queuedBackfillEntries < Math.floor(LogCollector.MAX_BACKFILL_QUEUE_ENTRIES / 2)
+        ) {
+            this.parseMode = 'active'
+        }
+
+        this.stats.parseMode = this.parseMode
+    }
+
+    private async dispatchNextParseBatch() {
+        if (!this.parser || this.inFlightParseBatch || this.pendingParseBatches.length === 0) {
+            return
+        }
+
+        if (this.parserReady) {
+            await this.parserReady
+        }
+
+        const batch = this.pendingParseBatches.shift()
+        if (!batch || !this.parser) {
+            return
+        }
+
+        this.inFlightParseBatch = batch
+        this.parser.postMessage({
+            type: 'parse',
+            batchId: batch.batchId,
+            entries: batch.entries,
+        } satisfies ParserInboundMessage)
+    }
+
+    private async handleParserMessage(message: ParserOutboundMessage) {
+        if (message.type === 'ready') {
+            this.resolveParserReady?.()
+            this.resolveParserReady = null
+            this.rejectParserReady = null
+            return
+        }
+
+        if (message.type === 'closed') {
+            this.resolveParserClosed?.()
+            this.resolveParserClosed = null
+            return
+        }
+
+        if (message.type === 'fatal') {
+            console.error('[LogCollector] Parser worker fatal:', message.error)
+            this.rejectParserReady?.(new Error(message.error))
+            return
+        }
+
+        const batch = this.inFlightParseBatch
         if (!batch || batch.batchId !== message.batchId) {
             return
         }
 
-        this.inFlightWriteBatch = null
-        this.stats.lastFlushFinishedAt = nowISO()
+        this.inFlightParseBatch = null
 
-        if (message.type === 'write-error') {
-            this.stats.totalFlushErrors++
-            this.stats.lastFlushDurationMs = null
-            console.error('[LogCollector] Failed to write batch:', message.error)
-            this.pendingWriteBatches.unshift(batch)
-            await Bun.sleep(250)
-            await this.dispatchNextWriteBatch()
+        if (message.type === 'parse-error') {
+            this.queuedParseEntries = Math.max(0, this.queuedParseEntries - batch.entries.length)
+            this.stats.totalParseErrors++
+            this.stats.droppedParseEntries += batch.entries.length
+            console.error('[LogCollector] Failed to parse batch:', message.error)
+            this.refreshParseMode()
+            await this.dispatchNextParseBatch()
             return
         }
 
-        this.queuedWriteEntries = Math.max(0, this.queuedWriteEntries - message.entries.length)
-        this.stats.totalFlushes++
-        this.stats.totalEntriesInserted += message.entries.length
-        this.stats.totalEntriesBroadcast += message.entries.length
-        this.stats.lastFlushDurationMs = batch.entries.length > 0 && this.stats.lastFlushStartedAt
-            ? Math.round((Date.now() - new Date(this.stats.lastFlushStartedAt).getTime()) * 100) / 100
-            : null
-        this.emitter.emit('entries', message.entries)
-
-        await this.dispatchNextWriteBatch()
+        this.queuedParseEntries = Math.max(0, this.queuedParseEntries - batch.entries.length)
+        this.stats.totalParseBatches++
+        this.stats.totalEntriesParsed += message.patches.length
+        this.queueBackfillPatches(message.patches)
+        this.refreshParseMode()
+        await this.dispatchNextParseBatch()
     }
 
-    private async drainWriterQueue() {
-        while (this.pendingWriteBatches.length > 0 || this.inFlightWriteBatch) {
+    private async drainParserQueue() {
+        while (this.pendingParseBatches.length > 0 || this.inFlightParseBatch) {
             await Bun.sleep(50)
         }
+    }
+
+    private queueBackfillPatches(patches: import('./storage').ParsedLogPatch[]) {
+        if (patches.length === 0) {
+            return
+        }
+
+        if (this.queuedBackfillEntries + patches.length > LogCollector.MAX_BACKFILL_QUEUE_ENTRIES) {
+            this.parseMode = 'degraded'
+            this.stats.parseMode = this.parseMode
+            this.stats.droppedParseEntries += patches.length
+            return
+        }
+
+        this.pendingBackfillBatches.push({
+            batchId: this.nextBackfillBatchId++,
+            patches,
+        })
+        this.queuedBackfillEntries += patches.length
+        if (this.queuedBackfillEntries > this.maxQueuedBackfillEntries) {
+            this.maxQueuedBackfillEntries = this.queuedBackfillEntries
+        }
+
+        this.refreshParseMode()
+        void this.dispatchNextWriterJob()
     }
 
     private scheduleResume(event: DockerEvent) {

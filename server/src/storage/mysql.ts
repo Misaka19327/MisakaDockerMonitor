@@ -5,6 +5,7 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
+    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
     Service,
@@ -123,6 +124,44 @@ export class MysqlStorage implements StorageAdapter {
             for (let index = 0; index < entries.length; index++) {
                 entries[index].id = firstInsertId + index
             }
+        }
+    }
+
+    async backfillParsedLogs(entries: ParsedLogPatch[]): Promise<void> {
+        if (entries.length === 0) return
+
+        const conn = await this.pool.getConnection()
+        try {
+            await conn.beginTransaction()
+            for (const entry of entries) {
+                await conn.execute(
+                    `UPDATE log_entries
+                     SET timestamp = ?,
+                         is_json = ?,
+                         parsed_json = ?,
+                         level = ?,
+                         content = ?,
+                         has_sql = ?,
+                         sql_text = ?
+                     WHERE id = ?`,
+                    [
+                        entry.timestamp,
+                        entry.isJson ? 1 : 0,
+                        entry.parsedJson,
+                        entry.level,
+                        entry.content,
+                        entry.hasSql ? 1 : 0,
+                        entry.sql,
+                        entry.id,
+                    ],
+                )
+            }
+            await conn.commit()
+        } catch (error) {
+            await conn.rollback()
+            throw error
+        } finally {
+            conn.release()
         }
     }
 
@@ -308,7 +347,7 @@ export class MysqlStorage implements StorageAdapter {
              LIMIT 1`, [serviceUuid],
         ) as any
         const row = rows[0]
-        return row ? row.watched === 1 : true
+        return row ? row.watched === 1 : false
     }
     
     async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {

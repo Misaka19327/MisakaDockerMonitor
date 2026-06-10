@@ -24,6 +24,10 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
             } catch {
             }
 
+            const watched = serviceUuid
+                ? await storage.isContainerWatched(serviceUuid)
+                : collector.isWatching(c.Id)
+
             results.push({
                 id: serviceUuid,
                 dockerId: c.Id,
@@ -33,14 +37,14 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
                 status: c.Status,
                 created: c.Created,
                 ports: c.Ports,
-                watched: collector.isWatching(c.Id),
+                watched,
                 stats: null,
             })
         }
         return results
       })
       .get('/:uuid', async ({params}) => {
-          const containerId = await resolveContainerId(params.uuid, storage)
+          const containerId = await resolveContainerId(params.uuid, storage, resolver)
           if (!containerId) return {id: params.uuid, name: '', state: 'removed', watched: false}
           
           const info = await getContainer(containerId)
@@ -57,6 +61,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           
           const labels: Record<string, string> = info.Config?.Labels || {}
           const serviceUuid = await resolver.resolve(labels, info.Name?.replace(/^\//, '') || '')
+          const watched = await storage.isContainerWatched(serviceUuid)
 
         return {
             id: serviceUuid,
@@ -68,7 +73,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           created: info.Created,
           ports: info.NetworkSettings?.Ports,
           env: info.Config?.Env,
-            watched: collector.isWatching(containerId),
+            watched,
           health: state?.Health?.Status ?? null,
           exitCode: state?.ExitCode ?? null,
           pid: state?.Pid ?? null,
@@ -84,7 +89,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           params: t.Object({uuid: t.String()}),
       })
       .get('/:uuid/stats', async ({params, status}) => {
-          const containerId = await resolveContainerId(params.uuid, storage)
+          const containerId = await resolveContainerId(params.uuid, storage, resolver)
           if (!containerId) return status(404, {error: 'Container not found'})
         try {
             return await getContainerStats(containerId)
@@ -95,7 +100,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           params: t.Object({uuid: t.String()}),
       })
       .post('/:uuid/watch', async ({params, status}) => {
-          const containerId = await resolveContainerId(params.uuid, storage)
+          const containerId = await resolveContainerId(params.uuid, storage, resolver)
           if (!containerId) return status(404, {error: 'Container not found'})
         try {
             const info = await getContainer(containerId)
@@ -111,8 +116,15 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           params: t.Object({uuid: t.String()}),
       })
       .delete('/:uuid/watch', async ({params}) => {
-          const containerId = await resolveContainerId(params.uuid, storage)
-          if (containerId) await collector.unwatchContainer(containerId)
+          const containerId = await resolveContainerId(params.uuid, storage, resolver)
+          const serviceUuid = await resolveServiceUuid(params.uuid, containerId, storage, resolver)
+
+          if (containerId && collector.isWatching(containerId)) {
+              await collector.unwatchContainer(containerId)
+          } else if (serviceUuid) {
+              await storage.setContainerWatched(serviceUuid, false)
+          }
+
         return {success: true, message: 'Stopped watching container'}
       }, {
           params: t.Object({uuid: t.String()}),
@@ -124,8 +136,60 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       })
 }
 
-async function resolveContainerId(uuid: string, storage: StorageAdapter): Promise<string | null> {
-    return storage.getActiveContainerId(uuid)
+async function resolveContainerId(
+    uuid: string,
+    storage: StorageAdapter,
+    resolver: ServiceResolver,
+): Promise<string | null> {
+    const activeContainerId = await storage.getActiveContainerId(uuid)
+    if (activeContainerId) {
+        return activeContainerId
+    }
+
+    const containers = await listContainers(true) as any[]
+    for (const container of containers) {
+        if (container.Id === uuid) {
+            return container.Id
+        }
+
+        const name = container.Names?.[0]?.replace(/^\//, '') || ''
+        const labels: Record<string, string> = container.Labels || {}
+
+        try {
+            const serviceUuid = await resolver.resolve(labels, name)
+            if (serviceUuid === uuid) {
+                return container.Id
+            }
+        } catch {
+        }
+    }
+
+    return null
+}
+
+async function resolveServiceUuid(
+    uuid: string,
+    containerId: string | null,
+    storage: StorageAdapter,
+    resolver: ServiceResolver,
+): Promise<string | null> {
+    const service = await storage.getServiceByUuid(uuid)
+    if (service) {
+        return service.uuid
+    }
+
+    if (!containerId) {
+        return null
+    }
+
+    try {
+        const info = await getContainer(containerId)
+        const name = info.Name?.replace(/^\//, '') || containerId
+        const labels: Record<string, string> = info.Config?.Labels || {}
+        return await resolver.resolve(labels, name)
+    } catch {
+        return null
+    }
 }
 
 function extractStats(stats: any, info: any) {

@@ -1,11 +1,13 @@
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
+import {useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 import {api} from '../lib/api'
+import {loadContainerPreferences, type ContainerPreferences, updateContainerStarred} from '../lib/container-preferences'
 import type {Container} from '../types'
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from './ui/card'
 import {Button} from './ui/button'
 import {Badge} from './ui/badge'
-import {Clock, Container as ContainerIcon, Cpu, Eye, EyeOff, HardDrive, MemoryStick, RefreshCw} from 'lucide-react'
+import {Clock, Container as ContainerIcon, Cpu, Eye, EyeOff, HardDrive, MemoryStick, RefreshCw, Star} from 'lucide-react'
 
 function stateColor(state: string) {
     switch (state) {
@@ -64,9 +66,78 @@ function ContainerStatsBar({stats}: { stats: Container['stats'] }) {
     )
 }
 
+type ContainerGroup = {
+    key: string
+    title: string
+    description: string
+    containers: Container[]
+}
+
+const containerGroups = [
+    {
+        key: 'watched-running',
+        title: 'Monitored / Running',
+        description: 'Watched containers that are currently running.',
+        match: (container: Container) => container.watched && container.state === 'running',
+    },
+    {
+        key: 'watched-idle',
+        title: 'Monitored / Not Running',
+        description: 'Watched containers that are paused, exited, or unavailable.',
+        match: (container: Container) => container.watched && container.state !== 'running',
+    },
+    {
+        key: 'unwatched-running',
+        title: 'Not Monitored / Running',
+        description: 'Running containers that are not being watched yet.',
+        match: (container: Container) => !container.watched && container.state === 'running',
+    },
+    {
+        key: 'unwatched-idle',
+        title: 'Not Monitored / Not Running',
+        description: 'Containers that are neither watched nor running.',
+        match: (container: Container) => !container.watched && container.state !== 'running',
+    },
+] as const
+
+function sortContainers(containers: Container[], preferences: ContainerPreferences): Container[] {
+    return [...containers].sort((left, right) => {
+        const leftPreference = preferences[left.id]
+        const rightPreference = preferences[right.id]
+        const leftStarred = leftPreference?.starred === true
+        const rightStarred = rightPreference?.starred === true
+
+        if (leftStarred !== rightStarred) {
+            return leftStarred ? -1 : 1
+        }
+
+        if (leftStarred && rightStarred) {
+            const leftLastOpened = leftPreference?.lastOpenedAt ? Date.parse(leftPreference.lastOpenedAt) : 0
+            const rightLastOpened = rightPreference?.lastOpenedAt ? Date.parse(rightPreference.lastOpenedAt) : 0
+            if (leftLastOpened !== rightLastOpened) {
+                return rightLastOpened - leftLastOpened
+            }
+        }
+
+        return left.name.localeCompare(right.name)
+    })
+}
+
+function buildContainerGroups(containers: Container[], preferences: ContainerPreferences): ContainerGroup[] {
+    return containerGroups
+        .map(group => ({
+            key: group.key,
+            title: group.title,
+            description: group.description,
+            containers: sortContainers(containers.filter(group.match), preferences),
+        }))
+        .filter(group => group.containers.length > 0)
+}
+
 export function Dashboard() {
     const navigate = useNavigate()
     const queryClient = useQueryClient()
+    const [preferences, setPreferences] = useState<ContainerPreferences>(() => loadContainerPreferences())
     
     const {data: containers, isLoading, refetch} = useQuery({
         queryKey: ['containers'],
@@ -83,6 +154,8 @@ export function Dashboard() {
         mutationFn: (id: string) => api.containers.unwatch(id),
         onSuccess: () => queryClient.invalidateQueries({queryKey: ['containers']}),
     })
+
+    const groups = buildContainerGroups(containers || [], preferences)
     
     return (
         <div className="p-6 max-w-7xl mx-auto">
@@ -113,60 +186,97 @@ export function Dashboard() {
                 </Card>
             )}
             
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {containers?.map((c: Container) => (
-                    <Card key={c.id} className="hover:shadow-md transition-shadow">
-                        <CardHeader className="pb-3">
-                            <div className="flex items-start justify-between">
-                                <div className="flex-1 min-w-0">
-                                    <CardTitle className="text-base truncate" title={c.name}>
-                                        {c.name}
-                                    </CardTitle>
-                                    <CardDescription className="truncate text-xs mt-1">
-                                        {c.image}
-                                    </CardDescription>
-                                </div>
-                                <Badge variant={stateColor(c.state) as any} className="ml-2 shrink-0">
-                                    {c.state}
-                                </Badge>
+            <div className="space-y-8">
+                {groups.map(group => (
+                    <section key={group.key} className="space-y-3">
+                        <div className="flex items-end justify-between gap-3">
+                            <div>
+                                <h2 className="text-lg font-semibold">{group.title}</h2>
+                                <p className="text-sm text-muted-foreground">{group.description}</p>
                             </div>
-                        </CardHeader>
-                        <CardContent>
-                            <p className="text-xs text-muted-foreground mb-2">{c.status}</p>
-                            <div className="min-h-[20px]">
-                                <ContainerStatsBar stats={c.stats}/>
-                            </div>
-                            <div className="grid grid-cols-[1fr_1fr] gap-2 mt-3">
-                                <Button
-                                    size="sm"
-                                    variant={c.watched ? 'outline' : 'default'}
-                                    onClick={() => c.watched ? unwatchMutation.mutate(c.id) : watchMutation.mutate(c.id)}
-                                    disabled={watchMutation.isPending || unwatchMutation.isPending}
-                                    className="w-full"
-                                >
-                                    {c.watched ? (
-                                        <>
-                                            <EyeOff className="h-3.5 w-3.5"/>
-                                            Unwatch
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Eye className="h-3.5 w-3.5"/>
-                                            Watch
-                                        </>
-                                    )}
-                                </Button>
-                                <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => navigate(`/container/${c.id}`)}
-                                    className={`w-full ${!c.watched ? 'invisible pointer-events-none' : ''}`}
-                                >
-                                    View Logs
-                                </Button>
-                            </div>
-                        </CardContent>
-                    </Card>
+                            <Badge variant="secondary">{group.containers.length}</Badge>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {group.containers.map((c: Container) => {
+                                const starred = preferences[c.id]?.starred === true
+
+                                return (
+                                    <Card key={c.id} className="hover:shadow-md transition-shadow">
+                                        <CardHeader className="pb-3">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <CardTitle className="text-base truncate" title={c.name}>
+                                                            {c.name}
+                                                        </CardTitle>
+                                                        {starred && (
+                                                            <Badge variant="secondary" className="shrink-0">
+                                                                Pinned
+                                                            </Badge>
+                                                        )}
+                                                    </div>
+                                                    <CardDescription className="truncate text-xs mt-1">
+                                                        {c.image}
+                                                    </CardDescription>
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <Button
+                                                        type="button"
+                                                        size="icon"
+                                                        variant="ghost"
+                                                        className={starred ? 'text-amber-500 hover:text-amber-500' : 'text-muted-foreground'}
+                                                        onClick={() => setPreferences(prev => updateContainerStarred(prev, c.id, !starred))}
+                                                        title={starred ? 'Unpin container' : 'Pin container'}
+                                                    >
+                                                        <Star className={`h-4 w-4 ${starred ? 'fill-current' : ''}`}/>
+                                                    </Button>
+                                                    <Badge variant={stateColor(c.state) as any}>
+                                                        {c.state}
+                                                    </Badge>
+                                                </div>
+                                            </div>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <p className="text-xs text-muted-foreground mb-2">{c.status}</p>
+                                            <div className="min-h-[20px]">
+                                                <ContainerStatsBar stats={c.stats}/>
+                                            </div>
+                                            <div className="grid grid-cols-[1fr_1fr] gap-2 mt-3">
+                                                <Button
+                                                    size="sm"
+                                                    variant={c.watched ? 'outline' : 'default'}
+                                                    onClick={() => c.watched ? unwatchMutation.mutate(c.id) : watchMutation.mutate(c.id)}
+                                                    disabled={watchMutation.isPending || unwatchMutation.isPending}
+                                                    className="w-full"
+                                                >
+                                                    {c.watched ? (
+                                                        <>
+                                                            <EyeOff className="h-3.5 w-3.5"/>
+                                                            Unwatch
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Eye className="h-3.5 w-3.5"/>
+                                                            Watch
+                                                        </>
+                                                    )}
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => navigate(`/container/${c.id}`)}
+                                                    className={`w-full ${!c.watched ? 'invisible pointer-events-none' : ''}`}
+                                                >
+                                                    View Logs
+                                                </Button>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                )
+                            })}
+                        </div>
+                    </section>
                 ))}
             </div>
         </div>

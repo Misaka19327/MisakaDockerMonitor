@@ -5,6 +5,7 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
+    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
     Service,
@@ -87,6 +88,39 @@ export class SqliteStorage implements StorageAdapter {
                     entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt,
                 )
                 entry.id = Number(result.lastInsertRowid)
+            }
+        })
+
+        tx(entries)
+    }
+
+    async backfillParsedLogs(entries: ParsedLogPatch[]): Promise<void> {
+        if (entries.length === 0) return
+
+        const stmt = this.db.prepare(`
+            UPDATE log_entries
+            SET timestamp = ?,
+                is_json = ?,
+                parsed_json = ?,
+                level = ?,
+                content = ?,
+                has_sql = ?,
+                sql = ?
+            WHERE id = ?
+        `)
+
+        const tx = this.db.transaction((items: ParsedLogPatch[]) => {
+            for (const entry of items) {
+                stmt.run(
+                    entry.timestamp,
+                    entry.isJson ? 1 : 0,
+                    entry.parsedJson,
+                    entry.level,
+                    entry.content,
+                    entry.hasSql ? 1 : 0,
+                    entry.sql,
+                    entry.id,
+                )
             }
         })
 
@@ -257,7 +291,7 @@ export class SqliteStorage implements StorageAdapter {
         const row = this.db.query(
             `SELECT watched FROM container_instances WHERE service_uuid = ? ORDER BY started_at DESC LIMIT 1`,
         ).get(serviceUuid) as { watched: number } | null
-        return row ? row.watched === 1 : true
+        return row ? row.watched === 1 : false
     }
     
     async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {

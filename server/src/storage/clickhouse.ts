@@ -4,6 +4,7 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
+    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
     Service,
@@ -109,6 +110,24 @@ export class ClickHouseStorage implements StorageAdapter {
             }
         })
         await this.client.insert({table: 'log_entries', values: rows, format: 'JSONEachRow'})
+    }
+
+    async backfillParsedLogs(entries: ParsedLogPatch[]): Promise<void> {
+        if (entries.length === 0) return
+
+        for (const entry of entries) {
+            await this.client.exec({
+                query: `ALTER TABLE log_entries UPDATE
+                    timestamp = ${entry.timestamp ? `'${escapeClickHouseString(entry.timestamp)}'` : 'NULL'},
+                    is_json = ${entry.isJson ? 1 : 0},
+                    parsed_json = ${entry.parsedJson ? `'${escapeClickHouseString(entry.parsedJson)}'` : 'NULL'},
+                    level = ${entry.level ? `'${escapeClickHouseString(entry.level)}'` : 'NULL'},
+                    content = '${escapeClickHouseString(entry.content)}',
+                    has_sql = ${entry.hasSql ? 1 : 0},
+                    sql = ${entry.sql ? `'${escapeClickHouseString(entry.sql)}'` : 'NULL'}
+                 WHERE id = ${entry.id}`,
+            })
+        }
     }
 
     async queryLogs(params: LogQueryParams): Promise<LogQueryResult> {
@@ -273,7 +292,7 @@ export class ClickHouseStorage implements StorageAdapter {
             format: 'JSONEachRow',
         })
         const rows = await result.json()
-        if (!rows[0]) return true
+        if (!rows[0]) return false
         return (rows[0] as any).watched === 1
     }
     

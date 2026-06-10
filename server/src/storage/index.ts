@@ -28,6 +28,17 @@ export interface LogEntry {
     createdAt: string
 }
 
+export interface ParsedLogPatch {
+    id: number
+    timestamp: string | null
+    isJson: boolean
+    parsedJson: string | null
+    level: string | null
+    content: string
+    hasSql: boolean
+    sql: string | null
+}
+
 export interface ContainerInstance {
     id: string
     serviceUuid: string
@@ -75,6 +86,7 @@ export interface StorageAdapter {
     // Logs
     insertLogs(entries: LogEntry[]): Promise<void>
     insertLog(entry: LogEntry): Promise<void>
+    backfillParsedLogs(entries: ParsedLogPatch[]): Promise<void>
     queryLogs(params: LogQueryParams): Promise<LogQueryResult>
     
     groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult>
@@ -156,6 +168,19 @@ export function rawLogToEntry(
         hasSql: false,
         sql: null,
         createdAt: nowISO(),
+    }
+}
+
+export function parsedLogToPatch(id: number, parsed: ParsedLog): ParsedLogPatch {
+    return {
+        id,
+        timestamp: parsed.timestamp,
+        isJson: parsed.isJson,
+        parsedJson: parsed.json ? JSON.stringify(parsed.json) : null,
+        level: parsed.level,
+        content: parsed.content,
+        hasSql: parsed.hasSql,
+        sql: parsed.sql,
     }
 }
 
