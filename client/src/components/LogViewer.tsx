@@ -5,6 +5,7 @@ import {api} from '../lib/api'
 import type {Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {formatInstanceLabel} from '../lib/time'
+import {getDistinctLevels, getLogFieldValue, resolveLogEntry, type ResolvedLogEntry} from '../lib/log-entry'
 import {Button} from './ui/button'
 import {Input} from './ui/input'
 import {Badge} from './ui/badge'
@@ -116,17 +117,10 @@ export function LogViewer() {
         }
     }, [instances])
 
-    const {data: levels} = useQuery({
-        queryKey: ['levels', serviceUuid],
-        queryFn: () => api.logs.levels(serviceUuid!),
-        enabled: !!serviceUuid,
-    })
-
     const {data: logResult, isLoading} = useQuery({
-        queryKey: ['logs', serviceUuid, search, level, instanceId],
+        queryKey: ['logs', serviceUuid, search, instanceId],
         queryFn: () => api.logs.query(serviceUuid!, {
             search: search || undefined,
-            level: level || undefined,
             instanceId: instanceId || undefined,
             limit: 500,
         }),
@@ -150,8 +144,12 @@ export function LogViewer() {
         for (const [id, e] of pushedEntries) {
             if (!merged.has(id)) merged.set(id, e)
         }
-        return Array.from(merged.values()).sort((a, b) => (a.id || 0) - (b.id || 0))
+        return Array.from(merged.values())
+            .sort((a, b) => (a.id || 0) - (b.id || 0))
+            .map(resolveLogEntry)
     }, [logResult?.entries, pushedEntries])
+
+    const levels = useMemo(() => getDistinctLevels(entries), [entries])
     
     // Client-side filter for pushed entries
     const filteredEntries = useMemo(() => {
@@ -169,19 +167,11 @@ export function LogViewer() {
 
     const groupedEntries = useMemo(() => {
         if (!inlineGrouping || !groupField) return null
-        const groups: { key: string; entries: LogEntry[] }[] = []
+        const groups: { key: string; entries: ResolvedLogEntry[] }[] = []
         let currentKey: string | null = null
-        let currentEntries: LogEntry[] = []
+        let currentEntries: ResolvedLogEntry[] = []
         for (const entry of displayEntries) {
-            let fieldValue = '(none)'
-            if (entry.isJson && entry.parsedJson) {
-                try {
-                    const parsed = JSON.parse(entry.parsedJson);
-                    const val = parsed[groupField];
-                    fieldValue = val != null ? String(val) : '(none)'
-                } catch {
-                }
-            }
+            const fieldValue = getLogFieldValue(entry, groupField)
             if (fieldValue !== currentKey) {
                 if (currentEntries.length > 0) groups.push({key: currentKey!, entries: currentEntries})
                 currentKey = fieldValue
@@ -193,6 +183,20 @@ export function LogViewer() {
         if (currentEntries.length > 0) groups.push({key: currentKey!, entries: currentEntries})
         return groups
     }, [displayEntries, inlineGrouping, groupField])
+
+    const groupSummary = useMemo(() => {
+        if (!groupField) return []
+
+        const counts = new Map<string, number>()
+        for (const entry of filteredEntries) {
+            const key = getLogFieldValue(entry, groupField)
+            counts.set(key, (counts.get(key) || 0) + 1)
+        }
+
+        return Array.from(counts.entries())
+            .map(([value, count]) => ({value, count}))
+            .sort((left, right) => right.count - left.count || left.value.localeCompare(right.value))
+    }, [filteredEntries, groupField])
 
     const toggleGroup = useCallback((key: string) => {
         setCollapsedGroups(prev => {
@@ -309,7 +313,7 @@ export function LogViewer() {
                         }}>Clear</Button>)}
                     </form>
                     <Select value={level} onChange={e => setLevel(e.target.value)}
-                            options={(levels || []).map(l => ({value: l, label: l}))} placeholder="All levels"
+                            options={levels.map(l => ({value: l, label: l}))} placeholder="All levels"
                             className="w-36"/>
                     <Select value={instanceId} onChange={e => setInstanceId(e.target.value)}
                             options={(instances || []).map(inst => ({
@@ -340,8 +344,8 @@ export function LogViewer() {
                             <ChevronRight className="h-3.5 w-3.5"/>}<Group className="h-3.5 w-3.5"/>Group by field
                     </button>
                     {showGroupPanel && (
-                        <div className="mt-2"><GroupPanel serviceUuid={serviceUuid!} instanceId={instanceId}
-                                                          field={groupField} onFieldChange={setGroupField}
+                        <div className="mt-2"><GroupPanel field={groupField} groups={groupSummary}
+                                                          onFieldChange={setGroupField}
                                                           inlineGrouping={inlineGrouping}
                                                           onInlineToggle={() => setInlineGrouping(!inlineGrouping)}/>
                         </div>)}

@@ -133,6 +133,32 @@ export function parsedLogToEntry(
     }
 }
 
+export function rawLogToEntry(
+    rawContent: string,
+    serviceUuid: string,
+    containerId: string,
+    containerName: string,
+    instanceId: string,
+    lineNumber: number
+): LogEntry {
+    return {
+        serviceUuid,
+        containerId,
+        containerName,
+        instanceId,
+        timestamp: null,
+        lineNumber,
+        rawContent,
+        isJson: false,
+        parsedJson: null,
+        level: null,
+        content: rawContent,
+        hasSql: false,
+        sql: null,
+        createdAt: nowISO(),
+    }
+}
+
 export async function createStorage(type: 'sqlite' | 'clickhouse' | 'mysql'): Promise<StorageAdapter> {
     switch (type) {
         case 'sqlite': {

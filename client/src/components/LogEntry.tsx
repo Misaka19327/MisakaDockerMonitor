@@ -1,9 +1,9 @@
 import {useState} from 'react'
-import type {LogEntry} from '../types'
 import {Badge} from './ui/badge'
 import {SqlView} from './SqlView'
 import {ChevronDown, ChevronRight} from 'lucide-react'
 import {formatTimestamp} from '../lib/time'
+import type {ResolvedLogEntry} from '../lib/log-entry'
 
 function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'destructive' | 'secondary' {
     if (!level) return 'secondary'
@@ -15,7 +15,7 @@ function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'd
     return 'secondary'
 }
 
-export function LogEntryView({entry, timezone}: { entry: LogEntry; timezone?: string }) {
+export function LogEntryView({entry, timezone}: { entry: ResolvedLogEntry; timezone?: string }) {
     const [expanded, setExpanded] = useState(false)
     const [showSql, setShowSql] = useState(false)
     
@@ -36,19 +36,14 @@ export function LogEntryView({entry, timezone}: { entry: LogEntry; timezone?: st
 }
 
 function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone}: {
-    entry: LogEntry
+    entry: ResolvedLogEntry
     expanded: boolean
     onToggle: () => void
     showSql: boolean
     onToggleSql: () => void
     timezone?: string
 }) {
-    let parsed: Record<string, unknown> = {}
-    try {
-        parsed = JSON.parse(entry.parsedJson || '{}')
-    } catch {
-        parsed = {}
-    }
+    const parsed = entry.derivedFields ?? {}
     
     // Extract common fields for summary line
     const timestamp = entry.timestamp
@@ -117,7 +112,7 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     )
 }
 
-function TextLogEntry({entry, timezone}: { entry: LogEntry; timezone?: string }) {
+function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: string }) {
     return (
         <div className="group rounded hover:bg-muted/50 transition-colors">
             <div className="flex items-start gap-2 px-2 py-1">

@@ -1,13 +1,12 @@
 import {EventEmitter} from 'events'
 import type {Readable} from 'stream'
 import type {StorageAdapter} from './storage'
-import {parsedLogToEntry} from './storage'
 import {listContainers, streamContainerLogs, watchContainerEvents} from './docker'
-import {parseLogLine} from './log-parser'
 import {ServiceResolver} from './service-resolver'
 import {config} from './config'
 import {nowISO, toErrorMessage} from './utils'
 import type {WriterInboundMessage, WriterOutboundMessage} from './log-writer-protocol'
+import {rawLogToEntry} from './storage'
 
 interface WatchedContainer {
     containerId: string
@@ -357,9 +356,8 @@ export class LogCollector {
             return
         }
 
-        const parsed = parseLogLine(line)
-        const entry = parsedLogToEntry(
-            parsed,
+        const entry = rawLogToEntry(
+            line,
             watched.serviceUuid,
             watched.containerId,
             watched.containerName,
