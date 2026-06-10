@@ -79,14 +79,15 @@ export class MysqlStorage implements StorageAdapter {
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
-        await this.pool.execute(
+        const [result] = await this.pool.execute(
             `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp, line_number,
                                       raw_content, is_json, parsed_json, level, content, has_sql, sql_text, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
                 entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
                 entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
-        )
+        ) as any
+        entry.id = Number(result.insertId)
     }
 
     async insertLogs(entries: LogEntry[]): Promise<void> {
@@ -94,7 +95,7 @@ export class MysqlStorage implements StorageAdapter {
         try {
             await conn.beginTransaction()
             for (const entry of entries) {
-                await conn.execute(
+                const [result] = await conn.execute(
                     `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp,
                                               line_number,
                                               raw_content, is_json, parsed_json, level, content, has_sql, sql_text,
@@ -103,7 +104,8 @@ export class MysqlStorage implements StorageAdapter {
                     [entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
                         entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
                         entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
-                )
+                ) as any
+                entry.id = Number(result.insertId)
             }
             await conn.commit()
         } catch (e) {

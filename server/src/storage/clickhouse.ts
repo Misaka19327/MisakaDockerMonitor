@@ -86,8 +86,12 @@ export class ClickHouseStorage implements StorageAdapter {
 
     async insertLogs(entries: LogEntry[]): Promise<void> {
         if (entries.length === 0) return
-        const rows = entries.map(entry => ({
-            id: entry.id || (Date.now() * 1000 + entry.lineNumber),
+        const baseId = Date.now() * 1000
+        const rows = entries.map((entry, index) => {
+            const id = entry.id || (baseId + index)
+            entry.id = id
+            return {
+                id,
             service_uuid: entry.serviceUuid,
             container_id: entry.containerId,
             container_name: entry.containerName,
@@ -102,7 +106,8 @@ export class ClickHouseStorage implements StorageAdapter {
             has_sql: entry.hasSql ? 1 : 0,
             sql: entry.sql,
             created_at: entry.createdAt.replace('T', ' ').substring(0, 19),
-        }))
+            }
+        })
         await this.client.insert({table: 'log_entries', values: rows, format: 'JSONEachRow'})
     }
 

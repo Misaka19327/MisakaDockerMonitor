@@ -17,6 +17,11 @@ interface WatchedContainer {
     stream: Readable | null
 }
 
+interface WatchContainerOptions {
+    forceNewInstance?: boolean
+    since?: number
+}
+
 export class LogCollector {
     private static readonly FLUSH_INTERVAL_MS = 1000
     private static readonly FLUSH_THRESHOLD = 50
@@ -79,8 +84,14 @@ export class LogCollector {
         }, LogCollector.FLUSH_INTERVAL_MS)
     }
     
-    async watchContainer(containerId: string, containerName: string, serviceUuid: string, forceNewInstance = false) {
+    async watchContainer(
+        containerId: string,
+        containerName: string,
+        serviceUuid: string,
+        options: WatchContainerOptions = {},
+    ) {
         if (this.watched.has(containerId)) return
+        const {forceNewInstance = false, since} = options
         
         if (forceNewInstance) {
             const existing = await this.storage.getActiveInstance(serviceUuid)
@@ -114,7 +125,7 @@ export class LogCollector {
         this.watched.set(containerId, watched)
         await this.storage.setContainerWatched(serviceUuid, true)
         
-        await this.startStreaming(watched)
+        await this.startStreaming(watched, since)
     }
     
     async unwatchContainer(containerId: string) {
@@ -154,10 +165,56 @@ export class LogCollector {
         this.eventStream?.destroy()
     }
     
-    private async startStreaming(watched: WatchedContainer) {
+    private async startStreaming(watched: WatchedContainer, since?: number) {
         try {
             watched.stream?.destroy()
             
+            // Phase 1: fetch historical logs since restart point (follow: false)
+            if (since) {
+                try {
+                    await new Promise<void>((resolve) => {
+                        let done = false
+                        streamContainerLogs({
+                            containerId: watched.containerId,
+                            follow: false,
+                            since,
+                            onLog: (line) => {
+                                watched.lineNumber++
+                                const parsed = parseLogLine(line)
+                                const entry = parsedLogToEntry(
+                                    parsed,
+                                    watched.serviceUuid,
+                                    watched.containerId,
+                                    watched.containerName,
+                                    watched.instanceId,
+                                    watched.lineNumber,
+                                )
+                                this.logBuffer.push(entry)
+                            },
+                            onError: () => {
+                            },
+                            onEnd: () => {
+                                if (done) return
+                                done = true
+                                resolve()
+                            },
+                        }).then(() => {
+                        }).catch(() => {
+                            if (!done) {
+                                done = true;
+                                resolve()
+                            }
+                        })
+                    })
+                    if (this.logBuffer.length > 0) {
+                        await this.flushBuffer()
+                    }
+                } catch (err) {
+                    console.warn(`Failed to fetch historical logs for ${watched.containerName}:`, toErrorMessage(err))
+                }
+            }
+            
+            // Phase 2: start live streaming (tail: 0, from now on)
             const stream = await streamContainerLogs({
                 containerId: watched.containerId,
                 follow: true,
@@ -185,14 +242,19 @@ export class LogCollector {
                     console.log(`Log stream ended for ${watched.containerName}`)
                 },
             })
-            
+
             watched.stream = stream
         } catch (err) {
             console.error(`Failed to start log stream for ${watched.containerName}:`, toErrorMessage(err))
         }
     }
     
-    private async handleDockerEvent(event: { type: string; containerId: string; containerName: string }) {
+    private async handleDockerEvent(event: {
+        type: string;
+        containerId: string;
+        containerName: string;
+        eventTime: number | null
+    }) {
         const watched = this.watched.get(event.containerId)
         
         if (watched) {
@@ -209,7 +271,8 @@ export class LogCollector {
                 const newInstance = await this.storage.createInstance(event.containerId, event.containerName, watched.serviceUuid)
                 watched.instanceId = newInstance
                 watched.lineNumber = 0
-                await this.startStreaming(watched)
+                const since = this.getReplaySince(event.eventTime)
+                await this.startStreaming(watched, since)
             }
         } else if (event.type === 'start' || event.type === 'restart') {
             let serviceUuid: string
@@ -222,13 +285,23 @@ export class LogCollector {
             
             if (await this.storage.isContainerWatched(serviceUuid)) {
                 try {
-                    await this.watchContainer(event.containerId, event.containerName, serviceUuid)
+                    await this.watchContainer(event.containerId, event.containerName, serviceUuid, {
+                        forceNewInstance: true,
+                        since: this.getReplaySince(event.eventTime),
+                    })
                     console.log(`Auto-resumed watching container: ${event.containerName}`)
                 } catch (err) {
                     console.warn(`Failed to auto-resume watching ${event.containerName}:`, toErrorMessage(err))
                 }
             }
         }
+    }
+    
+    private getReplaySince(eventTime: number | null): number {
+        if (typeof eventTime === 'number' && eventTime > 0) {
+            return eventTime
+        }
+        return Math.max(0, Math.floor(Date.now() / 1000) - 10)
     }
     
     private async flushBuffer() {

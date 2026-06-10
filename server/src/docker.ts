@@ -53,9 +53,12 @@ export async function streamContainerLogs(opts: LogStreamOptions) {
     stdout: true,
     stderr: true,
     timestamps: false,
-    tail: opts.tail ?? 0,
   }
   
+  if (opts.tail != null) {
+    streamOpts.tail = opts.tail
+  }
+
   if (opts.since) {
     streamOpts.since = opts.since
   }
@@ -68,10 +71,7 @@ export async function streamContainerLogs(opts: LogStreamOptions) {
   // Use dockerode's built-in demuxStream to properly separate headers
   const stdout = new PassThrough()
   const stderr = new PassThrough()
-  
-  // Demux the Docker stream (strips 8-byte headers)
-  container.modem.demuxStream(stream, stdout, stderr)
-  
+
   let stdoutBuffer = ''
   let stderrBuffer = ''
   
@@ -104,6 +104,9 @@ export async function streamContainerLogs(opts: LogStreamOptions) {
     stderrBuffer = handleData(chunk, stderrBuffer)
   })
   
+  // Demux after attaching listeners so non-follow buffers are not lost.
+  container.modem.demuxStream(stream, stdout, stderr)
+  
   stream.on('error', (err: Error) => {
     opts.onError?.(err)
   })
@@ -121,6 +124,7 @@ export async function watchContainerEvents(onEvent: (event: {
   type: string;
   containerId: string;
   containerName: string
+  eventTime: number | null
 }) => void) {
   const d = getDocker()
   
@@ -144,6 +148,7 @@ export async function watchContainerEvents(onEvent: (event: {
             type: evt.status || evt.Action || '',
             containerId,
             containerName,
+            eventTime: typeof evt.time === 'number' ? evt.time : null,
           })
         }
       } catch {

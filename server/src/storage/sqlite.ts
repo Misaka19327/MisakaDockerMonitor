@@ -64,11 +64,12 @@ export class SqliteStorage implements StorageAdapter {
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
         }
-        this.insertStmt.run(
+        const result = this.insertStmt.run(
             entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
             entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
             entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt,
         )
+        entry.id = Number(result.lastInsertRowid)
     }
 
     async insertLogs(entries: LogEntry[]): Promise<void> {
@@ -80,11 +81,12 @@ export class SqliteStorage implements StorageAdapter {
 
         const tx = this.db.transaction((items: LogEntry[]) => {
             for (const entry of items) {
-                stmt.run(
+                const result = stmt.run(
                     entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
                     entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
                     entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt,
                 )
+                entry.id = Number(result.lastInsertRowid)
             }
         })
 
