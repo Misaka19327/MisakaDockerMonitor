@@ -33,7 +33,17 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
             let container = null
             try {
                 container = await getContainerDetail(params.containerId, collector)
-            } catch { /* container may have been removed */
+            } catch {
+                // Container removed (e.g., rebuilt) — provide minimal info from storage
+                const instances = await storage.getInstances(params.containerId)
+                if (instances.length > 0) {
+                    container = {
+                        id: params.containerId,
+                        name: instances[0].containerName,
+                        state: 'removed',
+                        watched: false,
+                    }
+                }
             }
             
             return {...result, container}

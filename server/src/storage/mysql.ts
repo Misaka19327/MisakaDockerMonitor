@@ -63,12 +63,15 @@ export class MysqlStorage implements StorageAdapter {
             offset = 0
         } = params
         
-        const conditions: string[] = ['container_id = ?']
-        const values: any[] = [containerId]
-        
+        const conditions: string[] = []
+        const values: any[] = []
+
         if (instanceId) {
-            conditions.push('instance_id = ?');
+            conditions.push('instance_id = ?')
             values.push(instanceId)
+        } else {
+            conditions.push('container_id = ?')
+            values.push(containerId)
         }
         if (search) {
             conditions.push('(content LIKE ? OR raw_content LIKE ?)');
@@ -154,8 +157,28 @@ export class MysqlStorage implements StorageAdapter {
         await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [nowISO(), instanceId])
     }
     
-    async getInstances(containerId: string): Promise<ContainerInstance[]> {
-        const [rows] = await this.pool.execute(`SELECT * FROM container_instances WHERE container_id = ? ORDER BY started_at DESC`, [containerId]) as any
+    async getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]> {
+        let rows: any[]
+        if (containerName) {
+            const [result] = await this.pool.execute(
+                `SELECT *
+                 FROM container_instances
+                 WHERE container_id = ?
+                    OR container_name = ?
+                 ORDER BY started_at DESC`,
+                [containerId, containerName],
+            ) as any
+            rows = result
+        } else {
+            const [result] = await this.pool.execute(
+                `SELECT *
+                 FROM container_instances
+                 WHERE container_id = ?
+                 ORDER BY started_at DESC`,
+                [containerId],
+            ) as any
+            rows = result
+        }
         return (rows as any[]).map(r => ({
             id: r.id, containerId: r.container_id, containerName: r.container_name,
             startedAt: r.started_at, stoppedAt: r.stopped_at, status: r.status,

@@ -11,7 +11,16 @@ services:
       - monitor-data:/app/data
     environment:
       - NODE_ENV=production
-      - STORAGE_TYPE=sqlite
+      - STORAGE_TYPE=mysql
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=test
+      - MYSQL_DATABASE=misaka_docker_monitor
+      - CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-http://localhost:8123}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-docker_monitor}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
       - SQLITE_PATH=/app/data/logs.db
       - DOCKER_SOCKET=/var/run/docker.sock
       - TIMEZONE=${TIMEZONE:-Asia/Shanghai}
@@ -24,6 +33,12 @@ services:
       - HOST=0.0.0.0
       - PORT=3000
     restart: unless-stopped
+    networks:
+      - base
+
+networks:
+  base:
+    external: true
 
 volumes:
   monitor-data:

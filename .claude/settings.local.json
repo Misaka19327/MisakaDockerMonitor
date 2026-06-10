@@ -38,7 +38,8 @@
       "Bash(./node_modules/.bin/tsc.exe --noEmit)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(bun add *)"
+      "Bash(bun add *)",
+      "Bash(npx --package=typescript tsc --noEmit)"
     ]
   }
 }

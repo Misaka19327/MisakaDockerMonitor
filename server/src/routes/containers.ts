@@ -103,7 +103,13 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
         params: t.Object({id: t.String()}),
       })
       .get('/:id/instances', async ({params}) => {
-        return storage.getInstances(params.id)
+          let containerName: string | undefined
+          try {
+              const info = await getContainer(params.id)
+              containerName = info.Name?.replace(/^\//, '')
+          } catch { /* container may have been removed */
+          }
+          return storage.getInstances(params.id, containerName)
       }, {
         params: t.Object({id: t.String()}),
       })

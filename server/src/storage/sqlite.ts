@@ -65,12 +65,15 @@ export class SqliteStorage implements StorageAdapter {
             offset = 0
         } = params
         
-        const conditions: string[] = ['container_id = ?']
-        const values: SQLQueryBindings[] = [containerId]
-        
+        const conditions: string[] = []
+        const values: SQLQueryBindings[] = []
+
         if (instanceId) {
-            conditions.push('instance_id = ?');
+            conditions.push('instance_id = ?')
             values.push(instanceId)
+        } else {
+            conditions.push('container_id = ?')
+            values.push(containerId)
         }
         if (search) {
             conditions.push('(content LIKE ? OR raw_content LIKE ?)');
@@ -157,8 +160,24 @@ export class SqliteStorage implements StorageAdapter {
         )
     }
     
-    async getInstances(containerId: string): Promise<ContainerInstance[]> {
-        const rows = this.db.query(`SELECT * FROM container_instances WHERE container_id = ? ORDER BY started_at DESC`).all(containerId) as any[]
+    async getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]> {
+        let rows: any[]
+        if (containerName) {
+            rows = this.db.query(
+                `SELECT *
+                 FROM container_instances
+                 WHERE container_id = ?
+                    OR container_name = ?
+                 ORDER BY started_at DESC`,
+            ).all(containerId, containerName) as any[]
+        } else {
+            rows = this.db.query(
+                `SELECT *
+                 FROM container_instances
+                 WHERE container_id = ?
+                 ORDER BY started_at DESC`,
+            ).all(containerId) as any[]
+        }
         return rows.map(r => ({
             id: r.id, containerId: r.container_id, containerName: r.container_name,
             startedAt: r.started_at, stoppedAt: r.stopped_at, status: r.status,

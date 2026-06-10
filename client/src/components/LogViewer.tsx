@@ -2,7 +2,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useNavigate, useParams} from 'react-router-dom'
 import {useQuery, useQueryClient} from '@tanstack/react-query'
 import {api} from '../lib/api'
-import type {LogEntry} from '../types'
+import type {Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {formatInstanceLabel} from '../lib/time'
 import {Button} from './ui/button'
@@ -67,13 +67,39 @@ export function LogViewer() {
         queryFn: () => api.config.get(),
     })
     
-    useContainerStatusStream(containerId)
-    
+    // SSE real-time status updates
+    const [sseStatus, setSseStatus] = useState<Partial<Container> | null>(null)
+    useContainerStatusStream(containerId, useCallback((data: Record<string, unknown>) => {
+        setSseStatus(data as Partial<Container>)
+    }, []))
+
     const {data: instances} = useQuery({
         queryKey: ['instances', containerId],
         queryFn: () => api.containers.instances(containerId!),
         enabled: !!containerId,
+        refetchInterval: 5000,
     })
+    
+    // Auto-switch to new running instance when container restarts
+    const prevInstancesRef = useRef<import('../types').ContainerInstance[]>([])
+    useEffect(() => {
+        if (!instances) return
+        
+        const prevInstances = prevInstancesRef.current
+        prevInstancesRef.current = instances
+        
+        if (!instanceId) return
+        
+        const current = instances.find(i => i.id === instanceId)
+        const prevCurrent = prevInstances.find(i => i.id === instanceId)
+        
+        if (current?.status === 'stopped' && prevCurrent?.status === 'running') {
+            const running = instances.find(i => i.status === 'running')
+            if (running) {
+                setInstanceId(running.id)
+            }
+        }
+    }, [instances])
     
     const {data: levels} = useQuery({
         queryKey: ['levels', containerId],
@@ -93,7 +119,12 @@ export function LogViewer() {
         refetchInterval: paused ? false : 3000,
     })
     
-    const container = logResult?.container ?? null
+    const container = useMemo(() => {
+        const base = logResult?.container
+        if (!base && !sseStatus) return null
+        return {...(base || {}), ...sseStatus} as Container
+    }, [logResult?.container, sseStatus])
+
     const entries = logResult?.entries || []
     
     // Check if any entry has JSON content

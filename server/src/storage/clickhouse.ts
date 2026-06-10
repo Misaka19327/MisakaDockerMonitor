@@ -62,9 +62,13 @@ export class ClickHouseStorage implements StorageAdapter {
             offset = 0
         } = params
         
-        const escapedContainerId = escapeClickHouseString(containerId)
-        const conditions: string[] = [`container_id = '${escapedContainerId}'`]
-        if (instanceId) conditions.push(`instance_id = '${escapeClickHouseString(instanceId)}'`)
+        const conditions: string[] = []
+        
+        if (instanceId) {
+            conditions.push(`instance_id = '${escapeClickHouseString(instanceId)}'`)
+        } else {
+            conditions.push(`container_id = '${escapeClickHouseString(containerId)}'`)
+        }
         if (search) {
             const escapedSearch = escapeClickHouseString(search)
             conditions.push(`(content LIKE '%${escapedSearch}%' OR raw_content LIKE '%${escapedSearch}%')`)
@@ -157,14 +161,21 @@ export class ClickHouseStorage implements StorageAdapter {
         })
     }
     
-    async getInstances(containerId: string): Promise<ContainerInstance[]> {
-        const result = await this.client.query({
-            query: `SELECT *
-                    FROM container_instances
-                    WHERE container_id = '${escapeClickHouseString(containerId)}'
-                    ORDER BY started_at DESC`,
-            format: 'JSONEachRow',
-        })
+    async getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]> {
+        let query: string
+        if (containerName) {
+            query = `SELECT *
+                     FROM container_instances
+                     WHERE container_id = '${escapeClickHouseString(containerId)}'
+                        OR container_name = '${escapeClickHouseString(containerName)}'
+                     ORDER BY started_at DESC`
+        } else {
+            query = `SELECT *
+                     FROM container_instances
+                     WHERE container_id = '${escapeClickHouseString(containerId)}'
+                     ORDER BY started_at DESC`
+        }
+        const result = await this.client.query({query, format: 'JSONEachRow'})
         const rows = await result.json()
         return rows.map((r: any) => ({
             id: r.id, containerId: r.container_id, containerName: r.container_name,

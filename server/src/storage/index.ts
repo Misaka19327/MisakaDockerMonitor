@@ -66,7 +66,7 @@ export interface StorageAdapter {
     
     stopInstance(instanceId: string): Promise<void>
     
-    getInstances(containerId: string): Promise<ContainerInstance[]>
+    getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]>
     
     getActiveInstance(containerId: string): Promise<ContainerInstance | null>
     

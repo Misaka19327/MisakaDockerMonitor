@@ -172,24 +172,33 @@ export class LogCollector {
   
   private async handleDockerEvent(event: { type: string; containerId: string; containerName: string }) {
     const watched = this.watched.get(event.containerId)
-    if (!watched) return
-    
-    if (event.type === 'die' || event.type === 'kill') {
-      // Container stopped
-      await this.storage.stopInstance(watched.instanceId)
-      watched.stream?.destroy()
       
-      if (!config.retainLogsOnRestart) {
-        await this.storage.deleteLogsByInstance(watched.instanceId)
-      }
-    }
-    
-    if (event.type === 'start' || event.type === 'restart') {
-      // Container started - create new instance
-      const newInstance = await this.storage.createInstance(event.containerId, event.containerName)
-      watched.instanceId = newInstance
-      watched.lineNumber = 0
-      await this.startStreaming(watched)
+      if (watched) {
+          if (event.type === 'die' || event.type === 'kill') {
+              await this.storage.stopInstance(watched.instanceId)
+              watched.stream?.destroy()
+              
+              if (!config.retainLogsOnRestart) {
+                  await this.storage.deleteLogsByInstance(watched.instanceId)
+              }
+          }
+          
+          if (event.type === 'start' || event.type === 'restart') {
+              const newInstance = await this.storage.createInstance(event.containerId, event.containerName)
+              watched.instanceId = newInstance
+              watched.lineNumber = 0
+              await this.startStreaming(watched)
+          }
+      } else if (event.type === 'start' || event.type === 'restart') {
+          // Container started but not in watched map — auto-resume if previously watched
+          if (await this.storage.isContainerWatched(event.containerId)) {
+              try {
+                  await this.watchContainer(event.containerId, event.containerName)
+                  console.log(`Auto-resumed watching container: ${event.containerName}`)
+              } catch (err) {
+                  console.warn(`Failed to auto-resume watching ${event.containerName}:`, toErrorMessage(err))
+              }
+          }
     }
   }
   
