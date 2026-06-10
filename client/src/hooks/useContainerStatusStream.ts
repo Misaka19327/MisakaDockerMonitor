@@ -1,31 +1,41 @@
 import {useEffect, useRef} from 'react'
-import {useQueryClient} from '@tanstack/react-query'
+import type {LogEntry} from '../types'
 
 export function useContainerStatusStream(
-    containerId: string | undefined,
-    onStatus?: (data: Record<string, unknown>) => void
+    serviceUuid: string | undefined,
+    onStatus?: (data: Record<string, unknown>) => void,
+    onLogEntry?: (entry: LogEntry) => void,
 ) {
-    const queryClient = useQueryClient()
     const onStatusRef = useRef(onStatus)
     onStatusRef.current = onStatus
+    const onLogEntryRef = useRef(onLogEntry)
+    onLogEntryRef.current = onLogEntry
 
     useEffect(() => {
-        if (!containerId) return
+        if (!serviceUuid) return
 
         const token = localStorage.getItem('token')
-        const url = `/api/logs/${containerId}/live${token ? `?token=${encodeURIComponent(token)}` : ''}`
+        const url = `/api/logs/${serviceUuid}/live${token ? `?token=${encodeURIComponent(token)}` : ''}`
         const es = new EventSource(url)
-        
+
         es.addEventListener('status', (e: MessageEvent) => {
             try {
                 const statusData = JSON.parse(e.data)
                 onStatusRef.current?.(statusData)
-            } catch { /* ignore parse errors */
+            } catch {
             }
         })
         
+        es.onmessage = (e: MessageEvent) => {
+            try {
+                const entry = JSON.parse(e.data)
+                onLogEntryRef.current?.(entry)
+            } catch {
+            }
+        }
+
         return () => {
             es.close()
         }
-    }, [containerId, queryClient])
+    }, [serviceUuid])
 }

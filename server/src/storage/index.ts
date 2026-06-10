@@ -1,8 +1,18 @@
 import type {ParsedLog} from '../log-parser'
 import {nowISO} from '../utils'
 
+export interface Service {
+    uuid: string
+    serviceKey: string
+    project: string | null
+    service: string | null
+    displayName: string
+    createdAt: string
+}
+
 export interface LogEntry {
     id?: number
+    serviceUuid: string
     containerId: string
     containerName: string
     instanceId: string
@@ -20,6 +30,7 @@ export interface LogEntry {
 
 export interface ContainerInstance {
     id: string
+    serviceUuid: string
     containerId: string
     containerName: string
     startedAt: string
@@ -28,7 +39,7 @@ export interface ContainerInstance {
 }
 
 export interface LogQueryParams {
-    containerId: string
+    serviceUuid: string
     instanceId?: string
     search?: string
     level?: string
@@ -54,53 +65,58 @@ export interface GroupResult {
 export interface StorageAdapter {
     initialize(): Promise<void>
     
+    // Services
+    getOrCreateService(serviceKey: string, project: string | null, service: string | null, displayName: string): Promise<string>
+    
+    getServiceByUuid(uuid: string): Promise<Service | null>
+    
+    getActiveContainerId(serviceUuid: string): Promise<string | null>
+    
+    // Logs
     insertLogs(entries: LogEntry[]): Promise<void>
-    
     insertLog(entry: LogEntry): Promise<void>
-    
     queryLogs(params: LogQueryParams): Promise<LogQueryResult>
     
-    groupByField(containerId: string, field: string, instanceId?: string): Promise<GroupResult>
+    groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult>
     
-    createInstance(containerId: string, containerName: string): Promise<string>
+    getDistinctLevels(serviceUuid: string): Promise<string[]>
+    
+    getDistinctFieldValues(serviceUuid: string, field: string): Promise<string[]>
+    deleteLogsByInstance(instanceId: string): Promise<void>
+    
+    deleteLogsByService(serviceUuid: string): Promise<void>
+    deleteLogsBefore(cutoff: string): Promise<number>
+    
+    // Instances
+    createInstance(containerId: string, containerName: string, serviceUuid: string): Promise<string>
     
     stopInstance(instanceId: string): Promise<void>
     
-    getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]>
+    getInstances(serviceUuid: string): Promise<ContainerInstance[]>
     
-    getActiveInstance(containerId: string): Promise<ContainerInstance | null>
-    
-    isContainerWatched(containerId: string): Promise<boolean>
-    
-    setContainerWatched(containerId: string, watched: boolean): Promise<void>
-    
-    getDistinctLevels(containerId: string): Promise<string[]>
-    
-    getDistinctFieldValues(containerId: string, field: string): Promise<string[]>
-    
-    deleteLogsByInstance(instanceId: string): Promise<void>
-    
-    deleteLogsByContainer(containerId: string): Promise<void>
-    
-    deleteLogsBefore(cutoff: string): Promise<number>
-    
+    getActiveInstance(serviceUuid: string): Promise<ContainerInstance | null>
     deleteStoppedInstancesWithNoLogs(): Promise<number>
     
+    // Watch state
+    isContainerWatched(serviceUuid: string): Promise<boolean>
+    
+    setContainerWatched(serviceUuid: string, watched: boolean): Promise<void>
+
     checkpoint(): Promise<void>
-    
     vacuum(): Promise<void>
-    
     close(): Promise<void>
 }
 
 export function parsedLogToEntry(
     parsed: ParsedLog,
+    serviceUuid: string,
     containerId: string,
     containerName: string,
     instanceId: string,
     lineNumber: number
 ): LogEntry {
     return {
+        serviceUuid,
         containerId,
         containerName,
         instanceId,

@@ -1,11 +1,19 @@
 import mysql from 'mysql2/promise'
 import {config} from '../config'
 import {isSafeFieldName, nowISO} from '../utils'
-import type {ContainerInstance, GroupResult, LogEntry, LogQueryParams, LogQueryResult, StorageAdapter} from './index'
+import type {
+    ContainerInstance,
+    GroupResult,
+    LogEntry,
+    LogQueryParams,
+    LogQueryResult,
+    Service,
+    StorageAdapter
+} from './index'
 
 export class MysqlStorage implements StorageAdapter {
     private pool!: mysql.Pool
-    
+
     async initialize(): Promise<void> {
         this.pool = mysql.createPool({
             host: config.mysql.host,
@@ -16,28 +24,85 @@ export class MysqlStorage implements StorageAdapter {
             waitForConnections: true,
             connectionLimit: 10,
         })
-        
         await this.createTables()
     }
     
-    async insertLog(entry: LogEntry): Promise<void> {
-        await this.pool.execute(
-            `INSERT INTO log_entries (container_id, container_name, instance_id, timestamp, line_number, raw_content,
-                                      is_json, parsed_json, level, content, has_sql, sql_text, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [entry.containerId, entry.containerName, entry.instanceId, entry.timestamp, entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson, entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
-        )
+    // --- Services ---
+    
+    async getOrCreateService(serviceKey: string, project: string | null, service: string | null, displayName: string): Promise<string> {
+        const [existing] = await this.pool.execute(`SELECT uuid
+                                                    FROM services
+                                                    WHERE service_key = ?`, [serviceKey]) as any
+        if (existing[0]) return existing[0].uuid
+        
+        const uuid = crypto.randomUUID()
+        try {
+            await this.pool.execute(
+                `INSERT INTO services (uuid, service_key, project, service, display_name, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?)`,
+                [uuid, serviceKey, project, service, displayName, nowISO()],
+            )
+        } catch (e: any) {
+            if (e.code === 'ER_DUP_ENTRY') {
+                const [row] = await this.pool.execute(`SELECT uuid
+                                                       FROM services
+                                                       WHERE service_key = ?`, [serviceKey]) as any
+                return row[0].uuid
+            }
+            throw e
+        }
+        return uuid
     }
     
+    async getServiceByUuid(uuid: string): Promise<Service | null> {
+        const [rows] = await this.pool.execute(`SELECT *
+                                                FROM services
+                                                WHERE uuid = ?`, [uuid]) as any
+        const row = rows[0]
+        if (!row) return null
+        return this.rowToService(row)
+    }
+    
+    async getActiveContainerId(serviceUuid: string): Promise<string | null> {
+        const [rows] = await this.pool.execute(
+            `SELECT container_id
+             FROM container_instances
+             WHERE service_uuid = ?
+               AND status = 'running'
+             ORDER BY started_at DESC
+             LIMIT 1`,
+            [serviceUuid],
+        ) as any
+        return rows[0]?.container_id ?? null
+    }
+    
+    // --- Logs ---
+
+    async insertLog(entry: LogEntry): Promise<void> {
+        await this.pool.execute(
+            `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp, line_number,
+                                      raw_content, is_json, parsed_json, level, content, has_sql, sql_text, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
+                entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
+                entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
+        )
+    }
+
     async insertLogs(entries: LogEntry[]): Promise<void> {
         const conn = await this.pool.getConnection()
         try {
             await conn.beginTransaction()
             for (const entry of entries) {
                 await conn.execute(
-                    `INSERT INTO log_entries (container_id, container_name, instance_id, timestamp, line_number, raw_content, is_json, parsed_json, level, content, has_sql, sql_text, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [entry.containerId, entry.containerName, entry.instanceId, entry.timestamp, entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson, entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
+                    `INSERT INTO log_entries (service_uuid, container_id, container_name, instance_id, timestamp,
+                                              line_number,
+                                              raw_content, is_json, parsed_json, level, content, has_sql, sql_text,
+                                              created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [entry.serviceUuid, entry.containerId, entry.containerName, entry.instanceId, entry.timestamp,
+                        entry.lineNumber, entry.rawContent, entry.isJson ? 1 : 0, entry.parsedJson,
+                        entry.level, entry.content, entry.hasSql ? 1 : 0, entry.sql, entry.createdAt],
                 )
             }
             await conn.commit()
@@ -48,10 +113,10 @@ export class MysqlStorage implements StorageAdapter {
             conn.release()
         }
     }
-    
+
     async queryLogs(params: LogQueryParams): Promise<LogQueryResult> {
         const {
-            containerId,
+            serviceUuid,
             instanceId,
             search,
             level,
@@ -62,7 +127,7 @@ export class MysqlStorage implements StorageAdapter {
             limit = 200,
             offset = 0
         } = params
-        
+
         const conditions: string[] = []
         const values: any[] = []
 
@@ -70,164 +135,99 @@ export class MysqlStorage implements StorageAdapter {
             conditions.push('instance_id = ?')
             values.push(instanceId)
         } else {
-            conditions.push('container_id = ?')
-            values.push(containerId)
+            conditions.push('service_uuid = ?')
+            values.push(serviceUuid)
         }
         if (search) {
-            conditions.push('(content LIKE ? OR raw_content LIKE ?)');
+            conditions.push('(content LIKE ? OR raw_content LIKE ?)')
             values.push(`%${search}%`, `%${search}%`)
         }
         if (level) {
-            conditions.push('level = ?');
+            conditions.push('level = ?')
             values.push(level)
         }
         if (startTime) {
-            conditions.push('timestamp >= ?');
+            conditions.push('timestamp >= ?')
             values.push(startTime)
         }
         if (endTime) {
-            conditions.push('timestamp <= ?');
+            conditions.push('timestamp <= ?')
             values.push(endTime)
         }
         if (field && fieldValue && field !== 'level') {
             conditions.push('JSON_EXTRACT(parsed_json, ?) = ?')
             values.push(`$.${field}`, fieldValue)
         }
-        
+
         const where = conditions.join(' AND ')
-        
+
         const [countRows] = await this.pool.execute(`SELECT COUNT(*) as total FROM log_entries WHERE ${where}`, values) as any
         const total = countRows[0]?.total ?? 0
-        
+
         const [rows] = await this.pool.execute(
             `SELECT * FROM (SELECT * FROM log_entries WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?) AS sub ORDER BY id ASC`,
             [...values, String(limit), String(offset)],
         ) as any
         
-        return {
-            entries: (rows as any[]).map(r => this.rowToEntry(r)),
-            total,
-            hasMore: offset + limit < total,
-        }
+        return {entries: (rows as any[]).map(r => this.rowToEntry(r)), total, hasMore: offset + limit < total}
     }
     
-    async groupByField(containerId: string, field: string, instanceId?: string): Promise<GroupResult> {
-        if (!isSafeFieldName(field)) {
-            throw new Error(`Invalid field name: ${field}`)
-        }
-        const conditions = ['container_id = ?', 'level IS NOT NULL']
-        const values: any[] = [containerId]
-        if (instanceId) {
-            conditions.push('instance_id = ?');
-            values.push(instanceId)
-        }
-        
+    async groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult> {
+        if (!isSafeFieldName(field)) throw new Error(`Invalid field name: ${field}`)
+
         if (field === 'level') {
+            const conditions = ['service_uuid = ?', 'level IS NOT NULL']
+            const values: any[] = [serviceUuid]
+            if (instanceId) {
+                conditions.push('instance_id = ?');
+                values.push(instanceId)
+            }
             const [rows] = await this.pool.execute(
-                `SELECT level as value, COUNT(*) as count FROM log_entries WHERE ${conditions.join(' AND ')} GROUP BY level ORDER BY count DESC LIMIT 100`,
-                values,
+                `SELECT level as value, COUNT(*) as count
+                 FROM log_entries
+                 WHERE ${conditions.join(' AND ')}
+                 GROUP BY level
+                 ORDER BY count DESC
+                 LIMIT 100`, values,
             ) as any
             return {field, groups: rows}
         }
         
-        const jsonConditions = ['container_id = ?', 'is_json = 1', `JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL`]
-        const jsonValues: any[] = [containerId]
+        const conditions = ['service_uuid = ?', 'is_json = 1', `JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL`]
+        const values: any[] = [serviceUuid]
         if (instanceId) {
-            jsonConditions.push('instance_id = ?');
-            jsonValues.push(instanceId)
+            conditions.push('instance_id = ?');
+            values.push(instanceId)
         }
-        
         const [rows] = await this.pool.execute(
-            `SELECT JSON_EXTRACT(parsed_json, '$.${field}') as value, COUNT(*) as count FROM log_entries WHERE ${jsonConditions.join(' AND ')} GROUP BY value ORDER BY count DESC LIMIT 100`,
-            jsonValues,
+            `SELECT JSON_EXTRACT(parsed_json, '$.${field}') as value, COUNT(*) as count
+             FROM log_entries
+             WHERE ${conditions.join(' AND ')}
+             GROUP BY value
+             ORDER BY count DESC
+             LIMIT 100`, values,
         ) as any
         return {field, groups: rows}
     }
     
-    async createInstance(containerId: string, containerName: string): Promise<string> {
-        const id = `inst_${containerId}_${Date.now()}`
-        await this.pool.execute(
-            `INSERT INTO container_instances (id, container_id, container_name, started_at, status) VALUES (?, ?, ?, ?, 'running')`,
-            [id, containerId, containerName, nowISO()],
-        )
-        return id
-    }
-    
-    async stopInstance(instanceId: string): Promise<void> {
-        await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [nowISO(), instanceId])
-    }
-    
-    async getInstances(containerId: string, containerName?: string): Promise<ContainerInstance[]> {
-        let rows: any[]
-        if (containerName) {
-            const [result] = await this.pool.execute(
-                `SELECT *
-                 FROM container_instances
-                 WHERE container_id = ?
-                    OR container_name = ?
-                 ORDER BY started_at DESC`,
-                [containerId, containerName],
-            ) as any
-            rows = result
-        } else {
-            const [result] = await this.pool.execute(
-                `SELECT *
-                 FROM container_instances
-                 WHERE container_id = ?
-                 ORDER BY started_at DESC`,
-                [containerId],
-            ) as any
-            rows = result
-        }
-        return (rows as any[]).map(r => ({
-            id: r.id, containerId: r.container_id, containerName: r.container_name,
-            startedAt: r.started_at, stoppedAt: r.stopped_at, status: r.status,
-        }))
-    }
-    
-    async getActiveInstance(containerId: string): Promise<ContainerInstance | null> {
-        const [rows] = await this.pool.execute(
-            `SELECT * FROM container_instances WHERE container_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1`, [containerId],
-        ) as any
-        const row = (rows as any[])[0]
-        if (!row) return null
-        return {
-            id: row.id,
-            containerId: row.container_id,
-            containerName: row.container_name,
-            startedAt: row.started_at,
-            stoppedAt: row.stopped_at,
-            status: row.status
-        }
-    }
-    
-    async isContainerWatched(containerId: string): Promise<boolean> {
-        const [rows] = await this.pool.execute(
-            `SELECT watched FROM container_instances WHERE container_id = ? ORDER BY started_at DESC LIMIT 1`, [containerId],
-        ) as any
-        const row = (rows as any[])[0]
-        return row ? row.watched === 1 : true
-    }
-    
-    async setContainerWatched(containerId: string, watched: boolean): Promise<void> {
-        await this.pool.execute(
-            `UPDATE container_instances SET watched = ? WHERE container_id = ?`,
-            [watched ? 1 : 0, containerId],
-        )
-    }
-    
-    async getDistinctLevels(containerId: string): Promise<string[]> {
-        const [rows] = await this.pool.execute(`SELECT DISTINCT level FROM log_entries WHERE container_id = ? AND level IS NOT NULL`, [containerId]) as any
+    async getDistinctLevels(serviceUuid: string): Promise<string[]> {
+        const [rows] = await this.pool.execute(`SELECT DISTINCT level
+                                                FROM log_entries
+                                                WHERE service_uuid = ?
+                                                  AND level IS NOT NULL`, [serviceUuid]) as any
         return (rows as any[]).map(r => r.level)
     }
     
-    async getDistinctFieldValues(containerId: string, field: string): Promise<string[]> {
-        if (!isSafeFieldName(field)) {
-            throw new Error(`Invalid field name: ${field}`)
-        }
+    async getDistinctFieldValues(serviceUuid: string, field: string): Promise<string[]> {
+        if (!isSafeFieldName(field)) throw new Error(`Invalid field name: ${field}`)
         const [rows] = await this.pool.execute(
-            `SELECT DISTINCT JSON_EXTRACT(parsed_json, '$.${field}') as val FROM log_entries WHERE container_id = ? AND is_json = 1 AND JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL LIMIT 100`,
-            [containerId],
+            `SELECT DISTINCT JSON_EXTRACT(parsed_json, '$.${field}') as val
+             FROM log_entries
+             WHERE service_uuid = ?
+               AND is_json = 1
+               AND JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL
+             LIMIT 100`,
+            [serviceUuid],
         ) as any
         return (rows as any[]).map(r => r.val)
     }
@@ -237,25 +237,85 @@ export class MysqlStorage implements StorageAdapter {
         await this.pool.execute('DELETE FROM container_instances WHERE id = ?', [instanceId])
     }
     
-    async deleteLogsByContainer(containerId: string): Promise<void> {
-        await this.pool.execute('DELETE FROM log_entries WHERE container_id = ?', [containerId])
-        await this.pool.execute('DELETE FROM container_instances WHERE container_id = ?', [containerId])
+    async deleteLogsByService(serviceUuid: string): Promise<void> {
+        await this.pool.execute('DELETE FROM log_entries WHERE service_uuid = ?', [serviceUuid])
+        await this.pool.execute('DELETE FROM container_instances WHERE service_uuid = ?', [serviceUuid])
     }
     
     async deleteLogsBefore(cutoff: string): Promise<number> {
-        const [result] = await this.pool.execute(
-            'DELETE FROM log_entries WHERE created_at < ?',
-            [cutoff],
-        ) as any
+        const [result] = await this.pool.execute('DELETE FROM log_entries WHERE created_at < ?', [cutoff]) as any
         return result.affectedRows
+    }
+    
+    // --- Instances ---
+    
+    async createInstance(containerId: string, containerName: string, serviceUuid: string): Promise<string> {
+        const id = `inst_${containerId}_${Date.now()}`
+        await this.pool.execute(
+            `INSERT INTO container_instances (id, service_uuid, container_id, container_name, started_at, status)
+             VALUES (?, ?, ?, ?, ?, 'running')`,
+            [id, serviceUuid, containerId, containerName, nowISO()],
+        )
+        return id
+    }
+
+    async stopInstance(instanceId: string): Promise<void> {
+        await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [nowISO(), instanceId])
+    }
+    
+    async getInstances(serviceUuid: string): Promise<ContainerInstance[]> {
+        const [rows] = await this.pool.execute(
+            `SELECT *
+             FROM container_instances
+             WHERE service_uuid = ?
+             ORDER BY started_at DESC`, [serviceUuid],
+        ) as any
+        return (rows as any[]).map(r => this.rowToInstance(r))
+    }
+    
+    async getActiveInstance(serviceUuid: string): Promise<ContainerInstance | null> {
+        const [rows] = await this.pool.execute(
+            `SELECT *
+             FROM container_instances
+             WHERE service_uuid = ?
+               AND status = 'running'
+             ORDER BY started_at DESC
+             LIMIT 1`, [serviceUuid],
+        ) as any
+        const row = rows[0]
+        if (!row) return null
+        return this.rowToInstance(row)
+    }
+    
+    async isContainerWatched(serviceUuid: string): Promise<boolean> {
+        const [rows] = await this.pool.execute(
+            `SELECT watched
+             FROM container_instances
+             WHERE service_uuid = ?
+             ORDER BY started_at DESC
+             LIMIT 1`, [serviceUuid],
+        ) as any
+        const row = rows[0]
+        return row ? row.watched === 1 : true
+    }
+    
+    async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {
+        await this.pool.execute(
+            `UPDATE container_instances
+             SET watched = ?
+             WHERE service_uuid = ?`,
+            [watched ? 1 : 0, serviceUuid],
+        )
     }
     
     async deleteStoppedInstancesWithNoLogs(): Promise<number> {
         const [result] = await this.pool.execute(`
-      DELETE ci FROM container_instances ci
-      LEFT JOIN log_entries le ON ci.id = le.instance_id
-      WHERE ci.status = 'stopped' AND le.id IS NULL
-    `) as any
+            DELETE ci
+            FROM container_instances ci
+                     LEFT JOIN log_entries le ON ci.id = le.instance_id
+            WHERE ci.status = 'stopped'
+              AND le.id IS NULL
+        `) as any
         return result.affectedRows
     }
     
@@ -269,54 +329,87 @@ export class MysqlStorage implements StorageAdapter {
     async vacuum(): Promise<void> {
     }
     
+    // --- Private ---
+
     private async createTables() {
         const conn = await this.pool.getConnection()
         try {
             await conn.execute(`
-        CREATE TABLE IF NOT EXISTS container_instances (
-          id VARCHAR(100) PRIMARY KEY,
-          container_id VARCHAR(100) NOT NULL,
-          container_name VARCHAR(255) NOT NULL,
-          started_at DATETIME NOT NULL,
-          stopped_at DATETIME NULL,
-          status VARCHAR(20) NOT NULL DEFAULT 'running',
-          watched TINYINT NOT NULL DEFAULT 1,
-          INDEX idx_ci_container (container_id)
-        )
-      `)
-            await conn.execute('ALTER TABLE container_instances ADD COLUMN IF NOT EXISTS watched TINYINT NOT NULL DEFAULT 1')
-            
+                CREATE TABLE IF NOT EXISTS services
+                (
+                    uuid         VARCHAR(36) PRIMARY KEY,
+                    service_key  VARCHAR(511) NOT NULL UNIQUE,
+                    project      VARCHAR(255),
+                    service      VARCHAR(255),
+                    display_name VARCHAR(255) NOT NULL,
+                    created_at   DATETIME     NOT NULL
+                )
+            `)
+
             await conn.execute(`
-        CREATE TABLE IF NOT EXISTS log_entries (
-          id BIGINT AUTO_INCREMENT PRIMARY KEY,
-          container_id VARCHAR(100) NOT NULL,
-          container_name VARCHAR(255) NOT NULL,
-          instance_id VARCHAR(100) NOT NULL,
-          timestamp VARCHAR(100) NULL,
-          line_number INT NOT NULL,
-          raw_content TEXT NOT NULL,
-          is_json TINYINT NOT NULL DEFAULT 0,
-          parsed_json JSON NULL,
-          level VARCHAR(50) NULL,
-          content TEXT NOT NULL,
-          has_sql TINYINT NOT NULL DEFAULT 0,
-          sql_text MEDIUMTEXT NULL,
-          created_at DATETIME NOT NULL,
-          INDEX idx_le_container (container_id),
-          INDEX idx_le_instance (instance_id),
-          INDEX idx_le_level (level),
-          INDEX idx_le_timestamp (timestamp),
-          INDEX idx_le_created_at (created_at)
-        )
-      `)
+                CREATE TABLE IF NOT EXISTS container_instances
+                (
+                    id             VARCHAR(100) PRIMARY KEY,
+                    service_uuid   VARCHAR(36)  NOT NULL,
+                    container_id   VARCHAR(100) NOT NULL,
+                    container_name VARCHAR(255) NOT NULL,
+                    started_at     DATETIME     NOT NULL,
+                    stopped_at     DATETIME     NULL,
+                    status         VARCHAR(20)  NOT NULL DEFAULT 'running',
+                    watched        TINYINT      NOT NULL DEFAULT 1,
+                    INDEX idx_ci_service (service_uuid)
+                )
+            `)
+
+            await conn.execute(`
+                CREATE TABLE IF NOT EXISTS log_entries
+                (
+                    id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    service_uuid   VARCHAR(36)  NOT NULL,
+                    container_id   VARCHAR(100) NOT NULL,
+                    container_name VARCHAR(255) NOT NULL,
+                    instance_id    VARCHAR(100) NOT NULL,
+                    timestamp      VARCHAR(100) NULL,
+                    line_number    INT          NOT NULL,
+                    raw_content    TEXT         NOT NULL,
+                    is_json        TINYINT      NOT NULL DEFAULT 0,
+                    parsed_json    JSON         NULL,
+                    level          VARCHAR(50)  NULL,
+                    content        TEXT         NOT NULL,
+                    has_sql        TINYINT      NOT NULL DEFAULT 0,
+                    sql_text       MEDIUMTEXT   NULL,
+                    created_at     DATETIME     NOT NULL,
+                    INDEX idx_le_service (service_uuid),
+                    INDEX idx_le_instance (instance_id),
+                    INDEX idx_le_level (level),
+                    INDEX idx_le_timestamp (timestamp),
+                    INDEX idx_le_created_at (created_at)
+                )
+            `)
         } finally {
             conn.release()
         }
     }
     
+    private rowToService(row: any): Service {
+        return {
+            uuid: row.uuid, serviceKey: row.service_key, project: row.project,
+            service: row.service, displayName: row.display_name, createdAt: row.created_at,
+        }
+    }
+    
+    private rowToInstance(row: any): ContainerInstance {
+        return {
+            id: row.id, serviceUuid: row.service_uuid, containerId: row.container_id,
+            containerName: row.container_name, startedAt: row.started_at,
+            stoppedAt: row.stopped_at, status: row.status,
+        }
+    }
+
     private rowToEntry(row: any): LogEntry {
         return {
             id: row.id,
+            serviceUuid: row.service_uuid,
             containerId: row.container_id,
             containerName: row.container_name,
             instanceId: row.instance_id,

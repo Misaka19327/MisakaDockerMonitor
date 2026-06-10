@@ -7,18 +7,18 @@ import {formatBytes, formatUptime, isSafeFieldName, parseInteger} from '../utils
 
 export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollector }) {
     const {storage, collector} = deps
-    
+
     return new Elysia({prefix: '/api/logs'})
         .use(authGuard)
-        .get('/:containerId', async ({params, query, status}) => {
+        .get('/:serviceUuid', async ({params, query, status}) => {
             const {search, level, startTime, endTime, instanceId, field, fieldValue, limit, offset} = query
-            
+
             if (field && !isSafeFieldName(field)) {
                 return status(400, {error: 'Invalid field name'})
             }
-            
+
             const result = await storage.queryLogs({
-                containerId: params.containerId,
+                serviceUuid: params.serviceUuid,
                 search,
                 level,
                 startTime,
@@ -29,26 +29,25 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                 limit: parseInteger(limit, 200),
                 offset: parseInteger(offset, 0),
             })
-            
+
             let container = null
-            try {
-                container = await getContainerDetail(params.containerId, collector)
-            } catch {
-                // Container removed (e.g., rebuilt) — provide minimal info from storage
-                const instances = await storage.getInstances(params.containerId)
-                if (instances.length > 0) {
-                    container = {
-                        id: params.containerId,
-                        name: instances[0].containerName,
-                        state: 'removed',
-                        watched: false,
-                    }
+            const containerId = await storage.getActiveContainerId(params.serviceUuid)
+            if (containerId) {
+                try {
+                    container = await getContainerDetail(containerId, collector)
+                } catch {
                 }
             }
-            
+            if (!container) {
+                const service = await storage.getServiceByUuid(params.serviceUuid)
+                if (service) {
+                    container = {id: params.serviceUuid, name: service.displayName, state: 'removed', watched: false}
+                }
+            }
+
             return {...result, container}
         }, {
-            params: t.Object({containerId: t.String()}),
+            params: t.Object({serviceUuid: t.String()}),
             query: t.Object({
                 search: t.Optional(t.String()),
                 level: t.Optional(t.String()),
@@ -61,100 +60,81 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                 offset: t.Optional(t.Numeric()),
             }),
         })
-        .get('/:containerId/levels', async ({params}) => {
-            return storage.getDistinctLevels(params.containerId)
+        .get('/:serviceUuid/levels', async ({params}) => {
+            return storage.getDistinctLevels(params.serviceUuid)
         }, {
-            params: t.Object({containerId: t.String()}),
+            params: t.Object({serviceUuid: t.String()}),
         })
-        .get('/:containerId/group', async ({params, query, status}) => {
+        .get('/:serviceUuid/group', async ({params, query, status}) => {
             if (!query.field) {
                 return status(400, {error: 'field parameter is required'})
             }
             if (!isSafeFieldName(query.field)) {
                 return status(400, {error: 'Invalid field name'})
             }
-            
-            return storage.groupByField(params.containerId, query.field, query.instanceId)
+            return storage.groupByField(params.serviceUuid, query.field, query.instanceId)
         }, {
-            params: t.Object({containerId: t.String()}),
+            params: t.Object({serviceUuid: t.String()}),
             query: t.Object({
                 field: t.String(),
                 instanceId: t.Optional(t.String()),
             }),
         })
-        .get('/:containerId/field-values', async ({params, query, status}) => {
+        .get('/:serviceUuid/field-values', async ({params, query, status}) => {
             if (!query.field) {
                 return status(400, {error: 'field parameter is required'})
             }
             if (!isSafeFieldName(query.field)) {
                 return status(400, {error: 'Invalid field name'})
             }
-            
-            return storage.getDistinctFieldValues(params.containerId, query.field)
+            return storage.getDistinctFieldValues(params.serviceUuid, query.field)
         }, {
-            params: t.Object({containerId: t.String()}),
+            params: t.Object({serviceUuid: t.String()}),
             query: t.Object({
                 field: t.String(),
             }),
         })
-        .get('/:containerId/live', async ({params, set}) => {
+        .get('/:serviceUuid/live', async ({params, set}) => {
             set.headers['content-type'] = 'text/event-stream'
             set.headers['cache-control'] = 'no-cache'
             set.headers['connection'] = 'keep-alive'
             
-            const containerId = params.containerId
-            let interval: ReturnType<typeof setInterval> | null = null
+            const serviceUuid = params.serviceUuid
             let heartbeat: ReturnType<typeof setInterval> | null = null
             let statusInterval: ReturnType<typeof setInterval> | null = null
-            
+            let unsubscribe: (() => void) | null = null
+
             return new ReadableStream({
                 start(controller) {
                     const encoder = new TextEncoder()
-                    
+
                     const sendEvent = (data: unknown) => {
                         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
                     }
-                    
+
                     const sendStatusEvent = (data: unknown) => {
                         controller.enqueue(encoder.encode(`event: status\ndata: ${JSON.stringify(data)}\n\n`))
                     }
                     
-                    let lastId = 0
-                    interval = setInterval(async () => {
-                        try {
-                            const result = await storage.queryLogs({
-                                containerId,
-                                limit: 100,
-                                offset: 0,
-                            })
-                            
-                            if (result.entries.length > 0) {
-                                const newEntries = result.entries.filter((e: any) => (e.id || 0) > lastId)
-                                if (newEntries.length > 0) {
-                                    const orderedEntries = [...newEntries].sort((a: any, b: any) => (a.id || 0) - (b.id || 0))
-                                    for (const entry of orderedEntries) {
-                                        sendEvent(entry)
-                                    }
-                                    lastId = Math.max(...orderedEntries.map((entry: any) => entry.id || 0))
-                                }
-                            }
-                        } catch {
-                            // ignore
+                    // Subscribe to real-time log push from LogCollector
+                    unsubscribe = collector.onLog((entry) => {
+                        if (entry.serviceUuid === serviceUuid) {
+                            sendEvent(entry)
                         }
-                    }, 2000)
-                    
+                    })
+
                     heartbeat = setInterval(() => {
                         controller.enqueue(encoder.encode(`:heartbeat\n\n`))
                     }, 15000)
-                    
+
                     statusInterval = setInterval(async () => {
                         try {
+                            const containerId = await storage.getActiveContainerId(serviceUuid)
+                            if (!containerId) return
                             const info = await getContainer(containerId)
                             const state = info.State
                             let uptime: string | null = null
-                            if (state?.StartedAt) {
-                                uptime = formatUptime(state.StartedAt)
-                            }
+                            if (state?.StartedAt) uptime = formatUptime(state.StartedAt)
                             sendStatusEvent({
                                 state: state?.Status,
                                 health: state?.Health?.Status ?? null,
@@ -166,18 +146,17 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                                 uptime,
                             })
                         } catch {
-                            // container may have been removed
                         }
                     }, 10000)
                 },
                 cancel() {
-                    if (interval) clearInterval(interval)
+                    if (unsubscribe) unsubscribe()
                     if (heartbeat) clearInterval(heartbeat)
                     if (statusInterval) clearInterval(statusInterval)
                 },
             })
         }, {
-            params: t.Object({containerId: t.String()}),
+            params: t.Object({serviceUuid: t.String()}),
         })
 }
 
@@ -219,12 +198,13 @@ async function getContainerDetail(containerId: string, collector: { isWatching: 
                     if (totalWrite > 0) diskWrite = formatBytes(totalWrite)
                 }
             }
-        } catch { /* stats not available */
+        } catch {
         }
     }
     
     return {
         id: info.Id,
+        dockerId: info.Id,
         name: info.Name?.replace(/^\//, ''),
         image: info.Config?.Image,
         state: state?.Status,
@@ -243,12 +223,7 @@ async function getContainerDetail(containerId: string, collector: { isWatching: 
         networks: Object.keys(info.NetworkSettings?.Networks || {}),
         restartPolicy: info.HostConfig?.RestartPolicy?.Name ?? null,
         stats: cpuPercent !== null || memUsage !== null ? {
-            cpuPercent,
-            memUsage,
-            memPercent,
-            diskRead,
-            diskWrite,
-            uptime,
+            cpuPercent, memUsage, memPercent, diskRead, diskWrite, uptime,
         } : null,
     }
 }

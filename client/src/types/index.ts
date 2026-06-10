@@ -8,12 +8,13 @@ export interface ContainerStats {
 }
 
 export interface Container {
-  id: string
+    id: string              // service UUID
+    dockerId: string        // Docker hex ID
   name: string
   image: string
   state: string
   status: string
-  created: number
+    created: number | string
   ports: { IP?: string; PrivatePort?: number; PublicPort?: number; Type?: string }[]
   watched: boolean
   stats: ContainerStats | null
@@ -31,6 +32,7 @@ export interface Container {
 
 export interface LogEntry {
   id?: number
+    serviceUuid: string
   containerId: string
   containerName: string
   instanceId: string
@@ -48,6 +50,7 @@ export interface LogEntry {
 
 export interface ContainerInstance {
   id: string
+    serviceUuid: string
   containerId: string
   containerName: string
   startedAt: string

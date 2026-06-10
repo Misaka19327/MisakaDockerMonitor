@@ -5,7 +5,7 @@ import {Button} from './ui/button'
 import {Badge} from './ui/badge'
 
 interface GroupPanelProps {
-    containerId: string
+    serviceUuid: string
     instanceId?: string
     field: string
     onFieldChange: (field: string) => void
@@ -14,11 +14,11 @@ interface GroupPanelProps {
 }
 
 export function GroupPanel({
-                               containerId, instanceId, field, onFieldChange, inlineGrouping, onInlineToggle,
+                               serviceUuid, instanceId, field, onFieldChange, inlineGrouping, onInlineToggle,
                            }: GroupPanelProps) {
     const {data: groupResult, isLoading, refetch} = useQuery({
-        queryKey: ['group', containerId, field, instanceId],
-        queryFn: () => api.logs.group(containerId, field, instanceId),
+        queryKey: ['group', serviceUuid, field, instanceId],
+        queryFn: () => api.logs.group(serviceUuid, field, instanceId),
         enabled: !!field,
     })
     

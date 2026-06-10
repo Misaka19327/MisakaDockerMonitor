@@ -19,18 +19,18 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
             ...options?.headers,
         },
     })
-    
+
     if (res.status === 401) {
         localStorage.removeItem('token')
         window.location.href = '/login'
         throw new Error('Unauthorized')
     }
-    
+
     if (!res.ok) {
         const body = await res.json().catch(() => ({error: res.statusText}))
         throw new Error(body.error || res.statusText)
     }
-    
+
     return res.json()
 }
 
@@ -40,7 +40,7 @@ export const api = {
             return request('/api/config')
         },
     },
-    
+
     auth: {
         login(username: string, password: string): Promise<AuthResponse> {
             return request('/api/auth/login', {
@@ -53,30 +53,30 @@ export const api = {
             return request('/api/auth/me')
         },
     },
-    
+
     containers: {
         list(): Promise<Container[]> {
             return request('/api/containers')
         },
-        get(id: string): Promise<any> {
-            return request(`/api/containers/${id}`)
+        get(uuid: string): Promise<any> {
+            return request(`/api/containers/${uuid}`)
         },
-        stats(id: string): Promise<any> {
-            return request(`/api/containers/${id}/stats`)
+        stats(uuid: string): Promise<any> {
+            return request(`/api/containers/${uuid}/stats`)
         },
-        watch(id: string): Promise<{ success: boolean }> {
-            return request(`/api/containers/${id}/watch`, {method: 'POST'})
+        watch(uuid: string): Promise<{ success: boolean }> {
+            return request(`/api/containers/${uuid}/watch`, {method: 'POST'})
         },
-        unwatch(id: string): Promise<{ success: boolean }> {
-            return request(`/api/containers/${id}/watch`, {method: 'DELETE'})
+        unwatch(uuid: string): Promise<{ success: boolean }> {
+            return request(`/api/containers/${uuid}/watch`, {method: 'DELETE'})
         },
-        instances(id: string): Promise<ContainerInstance[]> {
-            return request(`/api/containers/${id}/instances`)
+        instances(uuid: string): Promise<ContainerInstance[]> {
+            return request(`/api/containers/${uuid}/instances`)
         },
     },
-    
+
     logs: {
-        query(containerId: string, params?: {
+        query(serviceUuid: string, params?: {
             search?: string
             level?: string
             startTime?: string
@@ -96,18 +96,18 @@ export const api = {
                 }
             }
             const query = qs.toString()
-            return request(`/api/logs/${containerId}${query ? `?${query}` : ''}`)
+            return request(`/api/logs/${serviceUuid}${query ? `?${query}` : ''}`)
         },
-        levels(containerId: string): Promise<string[]> {
-            return request(`/api/logs/${containerId}/levels`)
+        levels(serviceUuid: string): Promise<string[]> {
+            return request(`/api/logs/${serviceUuid}/levels`)
         },
-        group(containerId: string, field: string, instanceId?: string): Promise<GroupResult> {
+        group(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult> {
             const qs = new URLSearchParams({field})
             if (instanceId) qs.set('instanceId', instanceId)
-            return request(`/api/logs/${containerId}/group?${qs}`)
+            return request(`/api/logs/${serviceUuid}/group?${qs}`)
         },
-        fieldValues(containerId: string, field: string): Promise<string[]> {
-            return request(`/api/logs/${containerId}/field-values?field=${field}`)
+        fieldValues(serviceUuid: string, field: string): Promise<string[]> {
+            return request(`/api/logs/${serviceUuid}/field-values?field=${field}`)
         },
     },
 }
