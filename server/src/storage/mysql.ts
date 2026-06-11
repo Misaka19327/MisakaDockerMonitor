@@ -5,9 +5,9 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
-    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
+    ParsedLogPatch,
     Service,
     StorageAdapter
 } from './index'
@@ -394,7 +394,7 @@ export class MysqlStorage implements StorageAdapter {
                     service      VARCHAR(255),
                     display_name VARCHAR(255) NOT NULL,
                     created_at   DATETIME     NOT NULL
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             `)
 
             await conn.execute(`
@@ -409,7 +409,7 @@ export class MysqlStorage implements StorageAdapter {
                     status         VARCHAR(20)  NOT NULL DEFAULT 'running',
                     watched        TINYINT      NOT NULL DEFAULT 1,
                     INDEX idx_ci_service (service_uuid)
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             `)
 
             await conn.execute(`
@@ -435,7 +435,7 @@ export class MysqlStorage implements StorageAdapter {
                     INDEX idx_le_level (level),
                     INDEX idx_le_timestamp (timestamp),
                     INDEX idx_le_created_at (created_at)
-                )
+                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             `)
         } finally {
             conn.release()
