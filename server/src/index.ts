@@ -14,6 +14,16 @@ import {logRoutes} from './routes/logs'
 import {toErrorMessage} from './utils'
 
 const CLIENT_DIST = resolve(process.cwd(), '../client/dist')
+const CLIENT_INDEX = `${CLIENT_DIST}/index.html`
+
+function shouldServeClientApp(request: Request, status: number) {
+    if (status !== 404 || request.method !== 'GET') {
+        return false
+    }
+    const url = new URL(request.url)
+    const accept = request.headers.get('accept') || ''
+    return !url.pathname.startsWith('/api/') && accept.includes('text/html')
+}
 
 async function main() {
     console.log(`Starting MisakaDockerMonitor...`)
@@ -47,10 +57,6 @@ async function main() {
         }))
         .onError(({code, error, set, request}) => {
             if (code === 'NOT_FOUND') {
-                const url = new URL(request.url)
-                if (!url.pathname.startsWith('/api/')) {
-                    return Bun.file(`${CLIENT_DIST}/index.html`)
-                }
                 set.status = 404
                 return {error: 'Not Found'}
             }
@@ -63,7 +69,13 @@ async function main() {
     Bun.serve({
         port: config.port,
         hostname: config.host,
-        fetch: app.handle,
+        async fetch(request) {
+            const response = await app.handle(request)
+            if (shouldServeClientApp(request, response.status)) {
+                return new Response(Bun.file(CLIENT_INDEX))
+            }
+            return response
+        },
     })
     
     console.log(`Server running at http://${config.host}:${config.port}`)
