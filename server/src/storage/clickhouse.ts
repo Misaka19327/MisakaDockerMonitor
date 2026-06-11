@@ -4,9 +4,9 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
-    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
+    ParsedLogPatch,
     Service,
     StorageAdapter
 } from './index'
@@ -47,7 +47,7 @@ export class ClickHouseStorage implements StorageAdapter {
                 project,
                 service,
                 display_name: displayName,
-                created_at: nowISO().replace('T', ' ').substring(0, 19)
+                created_at: nowISO().substring(0, 19)
             }],
             format: 'JSONEachRow',
         })
@@ -106,7 +106,7 @@ export class ClickHouseStorage implements StorageAdapter {
             content: entry.content,
             has_sql: entry.hasSql ? 1 : 0,
             sql: entry.sql,
-            created_at: entry.createdAt.replace('T', ' ').substring(0, 19),
+                created_at: entry.createdAt.substring(0, 19),
             }
         })
         await this.client.insert({table: 'log_entries', values: rows, format: 'JSONEachRow'})
@@ -247,7 +247,7 @@ export class ClickHouseStorage implements StorageAdapter {
                 service_uuid: serviceUuid,
                 container_id: containerId,
                 container_name: containerName,
-                started_at: nowISO().replace('T', ' ').substring(0, 19),
+                started_at: nowISO().substring(0, 19),
                 stopped_at: null,
                 status: 'running'
             }],
@@ -257,7 +257,7 @@ export class ClickHouseStorage implements StorageAdapter {
     }
 
     async stopInstance(instanceId: string): Promise<void> {
-        const stoppedAt = nowISO().replace('T', ' ').substring(0, 19)
+        const stoppedAt = nowISO().substring(0, 19)
         await this.client.exec({
             query: `ALTER TABLE container_instances UPDATE stopped_at = '${stoppedAt}', status = 'stopped' WHERE id = '${escapeClickHouseString(instanceId)}'`,
         })

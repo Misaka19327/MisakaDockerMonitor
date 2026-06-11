@@ -39,7 +39,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(bun add *)",
-      "Bash(npx --package=typescript tsc --noEmit)"
+      "Bash(npx --package=typescript tsc --noEmit)",
+      "Bash(npx --package=typescript tsc --noEmit --project server/tsconfig.json)"
     ]
   }
 }

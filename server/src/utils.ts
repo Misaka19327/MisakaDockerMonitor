@@ -82,20 +82,11 @@ function getTimeZoneOffsetMinutes(date: Date, timeZone: string): number {
   return sign * (hours * 60 + minutes)
 }
 
-function formatOffset(offsetMinutes: number): string {
-  const sign = offsetMinutes >= 0 ? '+' : '-'
-  const absoluteMinutes = Math.abs(offsetMinutes)
-  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0')
-  const minutes = String(absoluteMinutes % 60).padStart(2, '0')
-  return `${sign}${hours}:${minutes}`
-}
-
 function formatDateInTimeZone(date: Date, timeZone: string): string {
   const parts = getZonedParts(date, timeZone)
-  const offset = formatOffset(getTimeZoneOffsetMinutes(date, timeZone))
   const milliseconds = String(date.getMilliseconds()).padStart(3, '0')
   
-  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}T${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:${String(parts.second).padStart(2, '0')}.${milliseconds}${offset}`
+  return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}:${String(parts.second).padStart(2, '0')}.${milliseconds}`
 }
 
 function zonedTimeToUtc(
