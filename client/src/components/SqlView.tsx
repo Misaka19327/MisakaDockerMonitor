@@ -16,8 +16,8 @@ export function SqlView({sql}: { sql: string }) {
     }, [sql])
     
     return (
-        <div className="border rounded-md bg-amber-50/50 overflow-hidden">
-            <div className="px-3 py-1 bg-amber-100/50 border-b text-xs font-medium text-amber-800">
+        <div className="sql-panel overflow-hidden rounded-md border">
+            <div className="sql-panel-header px-3 py-1 text-xs font-medium">
                 SQL
             </div>
             <pre className="sql-formatted p-3 overflow-x-auto max-h-64 overflow-y-auto">

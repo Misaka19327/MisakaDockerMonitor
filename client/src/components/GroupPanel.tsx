@@ -1,6 +1,7 @@
 import {Input} from './ui/input'
 import {Button} from './ui/button'
 import {Badge} from './ui/badge'
+import {useUiPreferences} from '../lib/ui-preferences'
 
 interface GroupPanelProps {
     field: string
@@ -13,30 +14,32 @@ interface GroupPanelProps {
 export function GroupPanel({
                                field, groups, onFieldChange, inlineGrouping, onInlineToggle,
                            }: GroupPanelProps) {
+    const {t} = useUiPreferences()
+
     return (
         <div>
             <div className="flex items-center gap-2 mb-2">
                 <Input
                     value={field}
                     onChange={e => onFieldChange(e.target.value)}
-                    placeholder="键名 (e.g., level, path, caller)"
+                    placeholder={t('group.fieldPlaceholder')}
                     className="w-64 h-8 text-xs"
                 />
-                <Button size="sm" variant="outline" className="h-8 text-xs" disabled>Group</Button>
+                <Button size="sm" variant="outline" className="h-8 text-xs" disabled>{t('group.button')}</Button>
                 <Button
                     size="sm"
                     variant={inlineGrouping ? 'default' : 'outline'}
                     className="h-8 text-xs"
                     onClick={onInlineToggle}
-                    title={inlineGrouping ? '在日志列表内展示分组' : '切换为内联分组模式'}
+                    title={inlineGrouping ? t('group.inlineTitle.enabled') : t('group.inlineTitle.disabled')}
                 >
-                    Inline
+                    {t('group.inline')}
                 </Button>
             </div>
             
             {inlineGrouping ? (
                 <p className="text-xs text-muted-foreground">
-                    内联分组已启用 — 日志列表按 "{field}" 分组展示
+                    {t('group.inlineEnabled', {field})}
                 </p>
             ) : (
                 <>
@@ -63,7 +66,7 @@ export function GroupPanel({
                     )}
 
                     {groups.length === 0 && (
-                        <p className="text-xs text-muted-foreground">No groups found for field "{field}"</p>
+                        <p className="text-xs text-muted-foreground">{t('group.noGroups', {field})}</p>
                     )}
                 </>
             )}

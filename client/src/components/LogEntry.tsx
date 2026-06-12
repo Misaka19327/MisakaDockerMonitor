@@ -4,6 +4,8 @@ import {SqlView} from './SqlView'
 import {ChevronDown, ChevronRight} from 'lucide-react'
 import {formatTimestamp} from '../lib/time'
 import type {ResolvedLogEntry} from '../lib/log-entry'
+import {summarizeSql} from '../lib/sql-summary'
+import {useUiPreferences} from '../lib/ui-preferences'
 
 function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'destructive' | 'secondary' {
     if (!level) return 'secondary'
@@ -43,7 +45,9 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     onToggleSql: () => void
     timezone?: string
 }) {
+    const {t} = useUiPreferences()
     const parsed = entry.derivedFields ?? {}
+    const sqlSummary = entry.sql ? summarizeSql(entry.sql) : null
     
     // Extract common fields for summary line
     const timestamp = entry.timestamp
@@ -58,54 +62,91 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     
     return (
         <div className="group rounded hover:bg-muted/50 transition-colors">
-            {/* Summary line */}
-            <div className="flex items-start gap-2 px-2 py-1 cursor-pointer select-none" onClick={onToggle}>
-        <span className="shrink-0 mt-0.5">
-          {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground"/> :
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground"/>}
-        </span>
-                <span className="text-xs text-muted-foreground shrink-0 w-8 text-right">{entry.lineNumber}</span>
-                {timestamp &&
-                    <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(timestamp, timezone)}</span>}
-                {level && <Badge variant={levelVariant(level)}
-                                 className="shrink-0 text-[10px] px-1.5 py-0 h-4">{level}</Badge>}
-                {caller && <span className="text-xs text-purple-600 truncate max-w-48">{caller}</span>}
-                {method && path && (
-                    <span className="text-xs text-orange-600 shrink-0">{method} {path}</span>
+            <div className="log-entry-row px-2 py-1">
+                <button
+                    type="button"
+                    className="shrink-0 mt-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={onToggle}
+                >
+                    {expanded ? <ChevronDown className="h-3.5 w-3.5"/> : <ChevronRight className="h-3.5 w-3.5"/>}
+                </button>
+                <span className="log-entry-line">{entry.lineNumber}</span>
+                {timestamp ? (
+                    <span className="log-entry-timestamp">{formatTimestamp(timestamp, timezone)}</span>
+                ) : (
+                    <span className="log-entry-timestamp">&nbsp;</span>
                 )}
-                <span className="text-xs flex-1 truncate">{content}</span>
-                {duration && <span className="text-xs text-muted-foreground shrink-0">{duration}</span>}
-                {entry.hasSql && (
-                    <button
-                        onClick={e => {
-                            e.stopPropagation();
-                            onToggleSql()
-                        }}
-                        className="text-xs text-blue-500 hover:text-blue-700 shrink-0 underline"
-                    >
-                        SQL
-                    </button>
-                )}
+                <div className="log-entry-main cursor-pointer select-none" onClick={onToggle}>
+                    <div className="log-entry-prefix">
+                        {level && <Badge variant={levelVariant(level)}
+                                         className="log-entry-level-badge shrink-0">{level}</Badge>}
+                        {caller && <span className="log-entry-meta log-entry-caller truncate max-w-48">{caller}</span>}
+                        {method && path && (
+                            <span className="log-entry-meta log-entry-path shrink-0">{method} {path}</span>
+                        )}
+                    </div>
+                    <span className="log-entry-message truncate">{content}</span>
+                    {entry.hasSql && (
+                        <button
+                            type="button"
+                            onClick={e => {
+                                e.stopPropagation()
+                                onToggleSql()
+                            }}
+                            className="log-entry-sql-chip"
+                        >
+                            {showSql ? <ChevronDown className="h-3 w-3"/> : <ChevronRight className="h-3 w-3"/>}
+                            <span className="log-entry-sql-label">{t('common.sql')}:</span>
+                            <span className="log-entry-sql-action">{sqlSummary?.action ?? 'sql'}</span>
+                            {sqlSummary?.primaryTable ? (
+                                <span className="log-entry-sql-primary">{sqlSummary.primaryTable}</span>
+                            ) : (
+                                <span className="log-entry-sql-fallback">{t('viewer.sqlSummaryFallback')}</span>
+                            )}
+                            {sqlSummary && sqlSummary.joinedTables.length > 0 && (
+                                <>
+                                    {sqlSummary.joinedTables.slice(0, 2).map(table => (
+                                        <span key={table} className="log-entry-sql-join">{table}</span>
+                                    ))}
+                                    {sqlSummary.joinedTables.length > 2 && (
+                                        <span className="log-entry-sql-fallback">
+                                            {t('viewer.sqlJoinMore', {count: sqlSummary.joinedTables.length - 2})}
+                                        </span>
+                                    )}
+                                </>
+                            )}
+                        </button>
+                    )}
+                </div>
+                {duration && <span className="log-entry-duration">{duration}</span>}
             </div>
             
-            {/* Expanded JSON view */}
             {expanded && (
-                <div className="ml-12 mr-4 mb-2 p-3 bg-slate-50 rounded-md border">
-          <pre className="log-entry-json whitespace-pre-wrap break-words text-xs">
-            {JSON.stringify(parsed, null, 2)}
-          </pre>
-                    {trace && (
-                        <div className="mt-2 text-xs text-muted-foreground">
-                            trace: {trace} {span && `| span: ${span}`}
-                        </div>
-                    )}
+                <div className="log-entry-row px-2 pb-2">
+                    <span className="w-3.5"/>
+                    <span className="log-entry-line"/>
+                    <span className="log-entry-timestamp"/>
+                    <div className="rounded-md border border-border/70 bg-card/70 p-3">
+                        <pre className="log-entry-pretty">
+                            {JSON.stringify(parsed, null, 2)}
+                        </pre>
+                        {trace && (
+                            <div className="log-entry-meta mt-2 text-muted-foreground">
+                                {t('viewer.inlineTrace')}: {trace} {span && `| ${t('viewer.inlineSpan')}: ${span}`}
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
             
-            {/* SQL view */}
             {showSql && entry.sql && (
-                <div className="ml-12 mr-4 mb-2">
-                    <SqlView sql={entry.sql}/>
+                <div className="log-entry-row px-2 pb-2">
+                    <span className="w-3.5"/>
+                    <span className="log-entry-line"/>
+                    <span className="log-entry-timestamp"/>
+                    <div>
+                        <SqlView sql={entry.sql}/>
+                    </div>
                 </div>
             )}
         </div>
@@ -115,12 +156,17 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
 function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: string }) {
     return (
         <div className="group rounded hover:bg-muted/50 transition-colors">
-            <div className="flex items-start gap-2 px-2 py-1">
-                <span className="text-xs text-muted-foreground shrink-0 w-8 text-right">{entry.lineNumber}</span>
-                {entry.timestamp && (
-                    <span className="text-xs text-blue-600 shrink-0">{formatTimestamp(entry.timestamp, timezone)}</span>
+            <div className="log-entry-row px-2 py-1">
+                <span className="w-3.5"/>
+                <span className="log-entry-line">{entry.lineNumber}</span>
+                {entry.timestamp ? (
+                    <span className="log-entry-timestamp">{formatTimestamp(entry.timestamp, timezone)}</span>
+                ) : (
+                    <span className="log-entry-timestamp">&nbsp;</span>
                 )}
-                <pre className="log-entry-text flex-1">{entry.rawContent}</pre>
+                <div className="log-entry-main">
+                    <pre className="log-entry-text flex-1">{entry.rawContent}</pre>
+                </div>
             </div>
         </div>
     )

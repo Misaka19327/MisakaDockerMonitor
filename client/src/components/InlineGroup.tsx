@@ -1,5 +1,6 @@
 import {memo} from 'react'
 import {ChevronDown, ChevronRight} from 'lucide-react'
+import {useUiPreferences} from '../lib/ui-preferences'
 
 const GROUP_COLORS = [
     {text: 'text-blue-500', bg: 'bg-blue-500'},
@@ -24,6 +25,7 @@ interface InlineGroupProps {
 export const InlineGroup = memo(function InlineGroup({
                                                          groupKey, colorIndex, count, collapsed, onToggle, children,
                                                      }: InlineGroupProps) {
+    const {t} = useUiPreferences()
     const color = GROUP_COLORS[colorIndex % GROUP_COLORS.length]
     
     return (
@@ -32,7 +34,7 @@ export const InlineGroup = memo(function InlineGroup({
             <div
                 className="relative flex-shrink-0 w-8 cursor-pointer group/brace select-none"
                 onClick={onToggle}
-                title={`${groupKey} (${count}) — click to ${collapsed ? 'expand' : 'collapse'}`}
+                title={`${groupKey} (${count}) — ${collapsed ? t('inline.toggle.expand') : t('inline.toggle.collapse')}`}
             >
                 {/* Vertical colored line */}
                 <div

@@ -6,7 +6,7 @@ import {markContainerOpened} from '../lib/container-preferences'
 import type {Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {formatInstanceLabel} from '../lib/time'
-import {getDistinctLevels, getLogFieldValue, resolveLogEntry, type ResolvedLogEntry} from '../lib/log-entry'
+import {getDistinctLevels, getLogFieldValue, type ResolvedLogEntry, resolveLogEntry} from '../lib/log-entry'
 import {Button} from './ui/button'
 import {Input} from './ui/input'
 import {Badge} from './ui/badge'
@@ -15,6 +15,7 @@ import {Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, Dra
 import {LogEntryView} from './LogEntry'
 import {GroupPanel} from './GroupPanel'
 import {InlineGroup} from './InlineGroup'
+import {useUiPreferences} from '../lib/ui-preferences'
 import {
     ArrowDown,
     ArrowLeft,
@@ -45,6 +46,7 @@ export function LogViewer() {
     const {id: serviceUuid} = useParams<{ id: string }>()
     const navigate = useNavigate()
     const queryClient = useQueryClient()
+    const {t} = useUiPreferences()
 
     const [search, setSearch] = useState('')
     const [searchInput, setSearchInput] = useState('')
@@ -259,11 +261,11 @@ export function LogViewer() {
                                 className={container.health === 'healthy' ? 'text-emerald-500' : container.health === 'unhealthy' ? 'text-red-500' : 'text-amber-500'}>{container.health}</span></span>)}
                             {container?.pid != null && container.pid > 0 && (
                                 <span className="inline-flex items-center gap-0.5 shrink-0"><Hash
-                                    className="h-3 w-3"/>PID: {container.pid}</span>)}
+                                    className="h-3 w-3"/>{t('viewer.pidPrefix')}: {container.pid}</span>)}
                             {container?.uptime && (<span className="inline-flex items-center gap-0.5 shrink-0"><Clock
-                                className="h-3 w-3"/>Up: {container.uptime}</span>)}
+                                className="h-3 w-3"/>{t('viewer.upPrefix')}: {container.uptime}</span>)}
                             {container?.state !== 'running' && container?.exitCode != null && (<span
-                                className="inline-flex items-center gap-0.5 shrink-0">Exit: {container.exitCode}</span>)}
+                                className="inline-flex items-center gap-0.5 shrink-0">{t('viewer.exitPrefix')}: {container.exitCode}</span>)}
                             {(container?.restartCount ?? 0) > 0 && (
                                 <span className="inline-flex items-center gap-0.5 shrink-0"><RotateCcw
                                     className="h-3 w-3"/>{container?.restartCount}</span>)}
@@ -276,11 +278,10 @@ export function LogViewer() {
                         </div>
                     </div>
                     <Drawer direction="right" open={envDrawerOpen} onOpenChange={setEnvDrawerOpen}>
-                        <DrawerTrigger asChild><Button variant="ghost" size="sm" title="Environment Variables"><Braces
-                            className="h-4 w-4"/>Env</Button></DrawerTrigger>
+                        <DrawerTrigger asChild><Button variant="ghost" size="sm" title={t('viewer.env')}><Braces
+                            className="h-4 w-4"/>{t('viewer.env')}</Button></DrawerTrigger>
                         <DrawerContent>
-                            <DrawerHeader><DrawerTitle>Environment
-                                Variables</DrawerTitle><DrawerDescription>{container?.name || serviceUuid}</DrawerDescription></DrawerHeader>
+                            <DrawerHeader><DrawerTitle>{t('viewer.env')}</DrawerTitle><DrawerDescription>{container?.name || serviceUuid}</DrawerDescription></DrawerHeader>
                             <div className="flex-1 overflow-auto px-4 pb-4">
                                 {container?.env && container.env.length > 0 ? (
                                     <div className="space-y-1">{container.env.map((line, i) => {
@@ -295,43 +296,42 @@ export function LogViewer() {
                                                 className="font-mono text-xs text-muted-foreground mt-0.5 break-all select-all">{value}</div>)}
                                         </div>)
                                     })}</div>) : (<div
-                                    className="flex items-center justify-center py-12 text-muted-foreground text-sm">No
-                                    environment variables found.</div>)}
+                                    className="flex items-center justify-center py-12 text-muted-foreground text-sm">{t('viewer.noEnv')}</div>)}
                             </div>
                         </DrawerContent>
                     </Drawer>
                     <Badge
-                        variant={container?.state === 'running' ? 'success' : 'soft-destructive'}>{container?.state || 'unknown'}</Badge>
+                        variant={container?.state === 'running' ? 'success' : 'soft-destructive'}>{container?.state || t('viewer.containerUnknown')}</Badge>
                     <Button variant="ghost" size="sm" onClick={() => setPaused(!paused)}>{paused ?
                         <Play className="h-4 w-4"/> :
-                        <Pause className="h-4 w-4"/>}{paused ? 'Resume' : 'Pause'}</Button>
+                        <Pause className="h-4 w-4"/>}{paused ? t('action.resume') : t('action.pause')}</Button>
                 </div>
                 <div className="flex items-center gap-2 w-full">
                     <form onSubmit={handleSearch} className="flex items-center gap-2 flex-1 min-w-[200px]">
                         <div className="relative flex-1"><Search
                             className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"/><Input
                             value={searchInput} onChange={e => setSearchInput(e.target.value)}
-                            placeholder="Search logs..." className="pl-9 h-9"/></div>
-                        <Button type="submit" size="sm" variant="outline">Search</Button>
+                            placeholder={t('viewer.searchLogs')} className="pl-9 h-9"/></div>
+                        <Button type="submit" size="sm" variant="outline">{t('action.search')}</Button>
                         {search && (<Button size="sm" variant="ghost" onClick={() => {
                             setSearch('');
                             setSearchInput('')
-                        }}>Clear</Button>)}
+                        }}>{t('action.clear')}</Button>)}
                     </form>
                     <Select value={level} onChange={e => setLevel(e.target.value)}
-                            options={levels.map(l => ({value: l, label: l}))} placeholder="All levels"
+                            options={levels.map(l => ({value: l, label: l}))} placeholder={t('viewer.allLevels')}
                             className="w-36"/>
                     <Select value={instanceId} onChange={e => setInstanceId(e.target.value)}
                             options={(instances || []).map(inst => ({
                                 value: inst.id,
                                 label: formatInstanceLabel(inst.startedAt, inst.status, appConfig?.timezone)
-                            }))} placeholder="All instances" className="w-64"/>
+                            }))} placeholder={t('viewer.allInstances')} className="w-64"/>
                     <Button variant={reverseOrder ? 'default' : 'ghost'} size="icon"
                             onClick={() => setReverseOrder(!reverseOrder)}
-                            title={reverseOrder ? '正向排序（旧→新）' : '反向排序（新→旧）'}><ArrowUpDown
+                            title={reverseOrder ? t('viewer.sort.forward') : t('viewer.sort.reverse')}><ArrowUpDown
                         className="h-4 w-4"/></Button>
                     <Button variant="ghost" size="icon" onClick={() => setAutoScroll(!autoScroll)}
-                            title={autoScroll ? '自动滚动：点击关闭' : '自动滚动：点击开启'}>
+                            title={autoScroll ? t('viewer.autoScroll.disable') : t('viewer.autoScroll.enable')}>
                         {reverseOrder ? (<ArrowUpIcon
                             className={`h-4 w-4 ${autoScroll ? 'text-primary' : 'text-muted-foreground'}`}/>) : (
                             <ArrowDown
@@ -340,14 +340,15 @@ export function LogViewer() {
                     <Button variant="ghost" size="icon" onClick={() => {
                         queryClient.invalidateQueries({queryKey: ['logs', serviceUuid]});
                         setPushedEntries(new Map())
-                    }} title="手动刷新日志"><RefreshCw className="h-4 w-4"/></Button>
+                    }} title={t('viewer.refreshLogs')}><RefreshCw className="h-4 w-4"/></Button>
                 </div>
                 {hasJsonLogs && (<div className="mt-2">
                     <button
                         className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
                         onClick={() => setShowGroupPanel(!showGroupPanel)}>
                         {showGroupPanel ? <ChevronDown className="h-3.5 w-3.5"/> :
-                            <ChevronRight className="h-3.5 w-3.5"/>}<Group className="h-3.5 w-3.5"/>Group by field
+                            <ChevronRight className="h-3.5 w-3.5"/>}<Group
+                        className="h-3.5 w-3.5"/>{showGroupPanel ? t('viewer.groupPanel.hide') : t('viewer.groupPanel.show')}
                     </button>
                     {showGroupPanel && (
                         <div className="mt-2"><GroupPanel field={groupField} groups={groupSummary}
@@ -357,10 +358,10 @@ export function LogViewer() {
                         </div>)}
                 </div>)}
                 <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                    <span>{logResult?.total ?? 0} log entries</span>
-                    <span>Live window: {pushedEntries.size}</span>
-                    {search && <span>Filtered by: "{search}"</span>}
-                    {level && <span>Level: {level}</span>}
+                    <span>{t('viewer.totalEntries', {count: logResult?.total ?? 0})}</span>
+                    <span>{t('viewer.liveWindow', {count: pushedEntries.size})}</span>
+                    {search && <span>{t('viewer.filteredBy', {value: search})}</span>}
+                    {level && <span>{t('viewer.levelLabel', {value: level})}</span>}
                 </div>
             </div>
             <div className="flex-1 overflow-hidden relative">
@@ -368,10 +369,10 @@ export function LogViewer() {
                     <div ref={topRef}/>
                     {isLoading && filteredEntries.length === 0 && (
                         <div className="flex items-center justify-center py-20 text-muted-foreground"><RefreshCw
-                            className="h-5 w-5 animate-spin mr-2"/>Loading logs...</div>)}
+                            className="h-5 w-5 animate-spin mr-2"/>{t('viewer.loading')}</div>)}
                     {!isLoading && filteredEntries.length === 0 && (
-                        <div className="flex items-center justify-center py-20 text-muted-foreground">No logs yet. Wait
-                            for logs to be collected...</div>)}
+                        <div
+                            className="flex items-center justify-center py-20 text-muted-foreground">{t('viewer.noLogs')}</div>)}
                     {inlineGrouping && groupedEntries ? (<div>{groupedEntries.map((group, gi) => (
                         <InlineGroup key={`${group.key}-${gi}`} groupKey={group.key} colorIndex={gi}
                                      count={group.entries.length} collapsed={collapsedGroups.has(`${gi}`)}
@@ -385,7 +386,7 @@ export function LogViewer() {
                 </div>
                 {showScrollTop && (<button onClick={scrollToTop}
                                            className="fixed bottom-6 right-6 z-50 h-10 w-10 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 flex items-center justify-center transition-opacity"
-                                           title="回到顶部"><ArrowUpIcon className="h-5 w-5"/></button>)}
+                                           title={t('viewer.scrollTop')}><ArrowUpIcon className="h-5 w-5"/></button>)}
             </div>
         </div>
     )

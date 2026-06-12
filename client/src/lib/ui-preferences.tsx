@@ -1,0 +1,293 @@
+import {createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState,} from 'react'
+
+export type Locale = 'zh-CN' | 'en'
+export type ThemeMode = 'light' | 'dark'
+
+type TranslationParams = Record<string, string | number>
+
+interface UiPreferencesContextValue {
+    locale: Locale
+    setLocale: (locale: Locale) => void
+    theme: ThemeMode
+    setTheme: (theme: ThemeMode) => void
+    toggleTheme: () => void
+    logFontSize: number
+    setLogFontSize: (size: number) => void
+    t: (key: string, params?: TranslationParams) => string
+}
+
+const STORAGE_KEYS = {
+    locale: 'ui:locale',
+    theme: 'ui:theme',
+    logFontSize: 'ui:log-font-size',
+} as const
+
+const MIN_LOG_FONT_SIZE = 11
+const MAX_LOG_FONT_SIZE = 18
+const DEFAULT_LOG_FONT_SIZE = 12
+
+const translations: Record<Locale, Record<string, string>> = {
+    'zh-CN': {
+        'nav.dashboard': '概览',
+        'action.signOut': '退出登录',
+        'action.refresh': '刷新',
+        'action.search': '搜索',
+        'action.clear': '清除',
+        'action.pause': '暂停',
+        'action.resume': '继续',
+        'common.user': '用户',
+        'common.none': '(无)',
+        'common.sql': 'SQL',
+        'common.json': 'JSON',
+        'language.toggle': '切换为 English',
+        'language.zh': '中',
+        'language.en': 'EN',
+        'theme.toggle.dark': '切换到黑暗模式',
+        'theme.toggle.light': '切换到浅色模式',
+        'theme.mode.light': '浅色',
+        'theme.mode.dark': '黑暗',
+        'settings.title': '显示设置',
+        'settings.description': '统一管理界面语言、主题和日志字号。',
+        'settings.open': '打开设置',
+        'settings.language': '语言',
+        'settings.theme': '主题',
+        'settings.logFontSize': '日志字号',
+        'settings.logFontHint': '全局生效，日志页会即时更新。',
+        'login.description': '登录后查看并监控你的 Docker 容器',
+        'login.username': '用户名',
+        'login.password': '密码',
+        'login.signIn': '登录',
+        'login.signingIn': '登录中...',
+        'login.failed': '登录失败',
+        'dashboard.title': '容器',
+        'dashboard.description': '监控 Docker 容器日志',
+        'dashboard.loading': '正在加载容器...',
+        'dashboard.empty': '未发现容器，请确认 Docker 正在运行。',
+        'dashboard.pin': '置顶容器',
+        'dashboard.unpin': '取消置顶',
+        'dashboard.pinned': '已置顶',
+        'dashboard.watch': '监控',
+        'dashboard.unwatch': '取消监控',
+        'dashboard.viewLogs': '查看日志',
+        'dashboard.group.watchedRunning.title': '已监控 / 运行中',
+        'dashboard.group.watchedRunning.description': '当前正在运行的已监控容器。',
+        'dashboard.group.watchedIdle.title': '已监控 / 未运行',
+        'dashboard.group.watchedIdle.description': '已监控但当前已暂停、退出或不可用的容器。',
+        'dashboard.group.unwatchedRunning.title': '未监控 / 运行中',
+        'dashboard.group.unwatchedRunning.description': '正在运行但尚未纳入监控的容器。',
+        'dashboard.group.unwatchedIdle.title': '未监控 / 未运行',
+        'dashboard.group.unwatchedIdle.description': '既未监控也未运行的容器。',
+        'viewer.env': '环境变量',
+        'viewer.noEnv': '未发现环境变量。',
+        'viewer.allLevels': '全部级别',
+        'viewer.allInstances': '全部实例',
+        'viewer.searchLogs': '搜索日志...',
+        'viewer.groupByField': '按字段分组',
+        'viewer.totalEntries': '{count} 条日志',
+        'viewer.liveWindow': '实时窗口：{count}',
+        'viewer.filteredBy': '过滤词："{value}"',
+        'viewer.levelLabel': '级别：{value}',
+        'viewer.loading': '正在加载日志...',
+        'viewer.noLogs': '暂无日志，等待采集...',
+        'viewer.refreshLogs': '手动刷新日志',
+        'viewer.sort.reverse': '反向排序（新→旧）',
+        'viewer.sort.forward': '正向排序（旧→新）',
+        'viewer.autoScroll.disable': '自动滚动：点击关闭',
+        'viewer.autoScroll.enable': '自动滚动：点击开启',
+        'viewer.logFontSize': '字号',
+        'viewer.logFontSmaller': '缩小字号',
+        'viewer.logFontLarger': '放大字号',
+        'viewer.inlineTrace': 'trace',
+        'viewer.inlineSpan': 'span',
+        'viewer.sqlSummaryFallback': '查看 SQL',
+        'viewer.sqlJoinMore': '+{count}',
+        'viewer.containerUnknown': '未知',
+        'viewer.upPrefix': '运行时长',
+        'viewer.exitPrefix': '退出码',
+        'viewer.pidPrefix': 'PID',
+        'viewer.groupPanel.show': '字段分组',
+        'viewer.groupPanel.hide': '收起字段分组',
+        'viewer.scrollTop': '回到顶部',
+        'group.fieldPlaceholder': '键名（如 level、path、caller）',
+        'group.button': '分组',
+        'group.inline': '内联',
+        'group.inlineTitle.enabled': '在日志列表内展示分组',
+        'group.inlineTitle.disabled': '切换为内联分组模式',
+        'group.inlineEnabled': '内联分组已启用，日志列表按 "{field}" 分组展示',
+        'group.noGroups': '字段 "{field}" 没有可展示的分组',
+        'inline.toggle.expand': '展开',
+        'inline.toggle.collapse': '收起',
+    },
+    en: {
+        'nav.dashboard': 'Dashboard',
+        'action.signOut': 'Sign out',
+        'action.refresh': 'Refresh',
+        'action.search': 'Search',
+        'action.clear': 'Clear',
+        'action.pause': 'Pause',
+        'action.resume': 'Resume',
+        'common.user': 'User',
+        'common.none': '(none)',
+        'common.sql': 'SQL',
+        'common.json': 'JSON',
+        'language.toggle': 'Switch to Chinese',
+        'language.zh': '中',
+        'language.en': 'EN',
+        'theme.toggle.dark': 'Switch to dark mode',
+        'theme.toggle.light': 'Switch to light mode',
+        'theme.mode.light': 'Light',
+        'theme.mode.dark': 'Dark',
+        'settings.title': 'Display Settings',
+        'settings.description': 'Manage interface language, theme, and log font size in one place.',
+        'settings.open': 'Open settings',
+        'settings.language': 'Language',
+        'settings.theme': 'Theme',
+        'settings.logFontSize': 'Log font size',
+        'settings.logFontHint': 'Applies globally and updates log views immediately.',
+        'login.description': 'Sign in to monitor your Docker containers',
+        'login.username': 'Username',
+        'login.password': 'Password',
+        'login.signIn': 'Sign In',
+        'login.signingIn': 'Signing in...',
+        'login.failed': 'Login failed',
+        'dashboard.title': 'Containers',
+        'dashboard.description': 'Monitor Docker container logs',
+        'dashboard.loading': 'Loading containers...',
+        'dashboard.empty': 'No containers found. Make sure Docker is running.',
+        'dashboard.pin': 'Pin container',
+        'dashboard.unpin': 'Unpin container',
+        'dashboard.pinned': 'Pinned',
+        'dashboard.watch': 'Watch',
+        'dashboard.unwatch': 'Unwatch',
+        'dashboard.viewLogs': 'View Logs',
+        'dashboard.group.watchedRunning.title': 'Monitored / Running',
+        'dashboard.group.watchedRunning.description': 'Watched containers that are currently running.',
+        'dashboard.group.watchedIdle.title': 'Monitored / Not Running',
+        'dashboard.group.watchedIdle.description': 'Watched containers that are paused, exited, or unavailable.',
+        'dashboard.group.unwatchedRunning.title': 'Not Monitored / Running',
+        'dashboard.group.unwatchedRunning.description': 'Running containers that are not being watched yet.',
+        'dashboard.group.unwatchedIdle.title': 'Not Monitored / Not Running',
+        'dashboard.group.unwatchedIdle.description': 'Containers that are neither watched nor running.',
+        'viewer.env': 'Environment Variables',
+        'viewer.noEnv': 'No environment variables found.',
+        'viewer.allLevels': 'All levels',
+        'viewer.allInstances': 'All instances',
+        'viewer.searchLogs': 'Search logs...',
+        'viewer.groupByField': 'Group by field',
+        'viewer.totalEntries': '{count} log entries',
+        'viewer.liveWindow': 'Live window: {count}',
+        'viewer.filteredBy': 'Filtered by: "{value}"',
+        'viewer.levelLabel': 'Level: {value}',
+        'viewer.loading': 'Loading logs...',
+        'viewer.noLogs': 'No logs yet. Wait for logs to be collected...',
+        'viewer.refreshLogs': 'Refresh logs',
+        'viewer.sort.reverse': 'Reverse order (new → old)',
+        'viewer.sort.forward': 'Forward order (old → new)',
+        'viewer.autoScroll.disable': 'Auto-scroll: click to disable',
+        'viewer.autoScroll.enable': 'Auto-scroll: click to enable',
+        'viewer.logFontSize': 'Font',
+        'viewer.logFontSmaller': 'Decrease font size',
+        'viewer.logFontLarger': 'Increase font size',
+        'viewer.inlineTrace': 'trace',
+        'viewer.inlineSpan': 'span',
+        'viewer.sqlSummaryFallback': 'View SQL',
+        'viewer.sqlJoinMore': '+{count}',
+        'viewer.containerUnknown': 'unknown',
+        'viewer.upPrefix': 'Up',
+        'viewer.exitPrefix': 'Exit',
+        'viewer.pidPrefix': 'PID',
+        'viewer.groupPanel.show': 'Group by field',
+        'viewer.groupPanel.hide': 'Hide field grouping',
+        'viewer.scrollTop': 'Back to top',
+        'group.fieldPlaceholder': 'Field name (e.g. level, path, caller)',
+        'group.button': 'Group',
+        'group.inline': 'Inline',
+        'group.inlineTitle.enabled': 'Show grouping inline in the log list',
+        'group.inlineTitle.disabled': 'Switch to inline grouping mode',
+        'group.inlineEnabled': 'Inline grouping is enabled. Logs are grouped by "{field}".',
+        'group.noGroups': 'No groups found for field "{field}"',
+        'inline.toggle.expand': 'expand',
+        'inline.toggle.collapse': 'collapse',
+    },
+}
+
+const UiPreferencesContext = createContext<UiPreferencesContextValue | null>(null)
+
+function clampLogFontSize(size: number): number {
+    return Math.min(MAX_LOG_FONT_SIZE, Math.max(MIN_LOG_FONT_SIZE, size))
+}
+
+function getInitialLocale(): Locale {
+    const stored = localStorage.getItem(STORAGE_KEYS.locale)
+    return stored === 'en' ? 'en' : 'zh-CN'
+}
+
+function getInitialTheme(): ThemeMode {
+    const stored = localStorage.getItem(STORAGE_KEYS.theme)
+    if (stored === 'light' || stored === 'dark') return stored
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function getInitialLogFontSize(): number {
+    const stored = Number(localStorage.getItem(STORAGE_KEYS.logFontSize))
+    return Number.isFinite(stored) ? clampLogFontSize(stored) : DEFAULT_LOG_FONT_SIZE
+}
+
+function translate(locale: Locale, key: string, params?: TranslationParams): string {
+    const template = translations[locale][key] ?? translations.en[key] ?? key
+    if (!params) return template
+    return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`))
+}
+
+export function UiPreferencesProvider({children}: { children: ReactNode }) {
+    const [locale, setLocale] = useState<Locale>(getInitialLocale)
+    const [theme, setTheme] = useState<ThemeMode>(getInitialTheme)
+    const [logFontSize, setLogFontSizeState] = useState<number>(getInitialLogFontSize)
+    
+    useEffect(() => {
+        localStorage.setItem(STORAGE_KEYS.locale, locale)
+        document.documentElement.lang = locale
+    }, [locale])
+    
+    useEffect(() => {
+        localStorage.setItem(STORAGE_KEYS.theme, theme)
+        document.documentElement.classList.toggle('dark', theme === 'dark')
+    }, [theme])
+    
+    useEffect(() => {
+        const size = clampLogFontSize(logFontSize)
+        localStorage.setItem(STORAGE_KEYS.logFontSize, String(size))
+        document.documentElement.style.setProperty('--log-font-size', `${size}px`)
+    }, [logFontSize])
+    
+    const setLogFontSize = useCallback((size: number) => {
+        setLogFontSizeState(clampLogFontSize(size))
+    }, [])
+    
+    const toggleTheme = useCallback(() => {
+        setTheme(current => current === 'dark' ? 'light' : 'dark')
+    }, [])
+    
+    const t = useCallback((key: string, params?: TranslationParams) => translate(locale, key, params), [locale])
+    
+    const value = useMemo<UiPreferencesContextValue>(() => ({
+        locale,
+        setLocale,
+        theme,
+        setTheme,
+        toggleTheme,
+        logFontSize,
+        setLogFontSize,
+        t,
+    }), [locale, theme, toggleTheme, logFontSize, setLogFontSize, t])
+    
+    return <UiPreferencesContext.Provider value={value}>{children}</UiPreferencesContext.Provider>
+}
+
+export function useUiPreferences() {
+    const context = useContext(UiPreferencesContext)
+    if (!context) {
+        throw new Error('useUiPreferences must be used within UiPreferencesProvider')
+    }
+    return context
+}

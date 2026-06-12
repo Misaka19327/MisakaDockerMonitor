@@ -2,12 +2,23 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query'
 import {useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 import {api} from '../lib/api'
-import {loadContainerPreferences, type ContainerPreferences, updateContainerStarred} from '../lib/container-preferences'
+import {type ContainerPreferences, loadContainerPreferences, updateContainerStarred} from '../lib/container-preferences'
 import type {Container} from '../types'
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from './ui/card'
 import {Button} from './ui/button'
 import {Badge} from './ui/badge'
-import {Clock, Container as ContainerIcon, Cpu, Eye, EyeOff, HardDrive, MemoryStick, RefreshCw, Star} from 'lucide-react'
+import {
+    Clock,
+    Container as ContainerIcon,
+    Cpu,
+    Eye,
+    EyeOff,
+    HardDrive,
+    MemoryStick,
+    RefreshCw,
+    Star
+} from 'lucide-react'
+import {useUiPreferences} from '../lib/ui-preferences'
 
 function stateColor(state: string) {
     switch (state) {
@@ -73,33 +84,6 @@ type ContainerGroup = {
     containers: Container[]
 }
 
-const containerGroups = [
-    {
-        key: 'watched-running',
-        title: 'Monitored / Running',
-        description: 'Watched containers that are currently running.',
-        match: (container: Container) => container.watched && container.state === 'running',
-    },
-    {
-        key: 'watched-idle',
-        title: 'Monitored / Not Running',
-        description: 'Watched containers that are paused, exited, or unavailable.',
-        match: (container: Container) => container.watched && container.state !== 'running',
-    },
-    {
-        key: 'unwatched-running',
-        title: 'Not Monitored / Running',
-        description: 'Running containers that are not being watched yet.',
-        match: (container: Container) => !container.watched && container.state === 'running',
-    },
-    {
-        key: 'unwatched-idle',
-        title: 'Not Monitored / Not Running',
-        description: 'Containers that are neither watched nor running.',
-        match: (container: Container) => !container.watched && container.state !== 'running',
-    },
-] as const
-
 function sortContainers(containers: Container[], preferences: ContainerPreferences): Container[] {
     return [...containers].sort((left, right) => {
         const leftPreference = preferences[left.id]
@@ -123,8 +107,37 @@ function sortContainers(containers: Container[], preferences: ContainerPreferenc
     })
 }
 
-function buildContainerGroups(containers: Container[], preferences: ContainerPreferences): ContainerGroup[] {
-    return containerGroups
+function buildContainerGroups(
+    containers: Container[],
+    preferences: ContainerPreferences,
+    t: (key: string) => string,
+): ContainerGroup[] {
+    return [
+        {
+            key: 'watched-running',
+            title: t('dashboard.group.watchedRunning.title'),
+            description: t('dashboard.group.watchedRunning.description'),
+            match: (container: Container) => container.watched && container.state === 'running',
+        },
+        {
+            key: 'watched-idle',
+            title: t('dashboard.group.watchedIdle.title'),
+            description: t('dashboard.group.watchedIdle.description'),
+            match: (container: Container) => container.watched && container.state !== 'running',
+        },
+        {
+            key: 'unwatched-running',
+            title: t('dashboard.group.unwatchedRunning.title'),
+            description: t('dashboard.group.unwatchedRunning.description'),
+            match: (container: Container) => !container.watched && container.state === 'running',
+        },
+        {
+            key: 'unwatched-idle',
+            title: t('dashboard.group.unwatchedIdle.title'),
+            description: t('dashboard.group.unwatchedIdle.description'),
+            match: (container: Container) => !container.watched && container.state !== 'running',
+        },
+    ]
         .map(group => ({
             key: group.key,
             title: group.title,
@@ -137,6 +150,7 @@ function buildContainerGroups(containers: Container[], preferences: ContainerPre
 export function Dashboard() {
     const navigate = useNavigate()
     const queryClient = useQueryClient()
+    const {t} = useUiPreferences()
     const [preferences, setPreferences] = useState<ContainerPreferences>(() => loadContainerPreferences())
     
     const {data: containers, isLoading, refetch} = useQuery({
@@ -154,26 +168,26 @@ export function Dashboard() {
         mutationFn: (id: string) => api.containers.unwatch(id),
         onSuccess: () => queryClient.invalidateQueries({queryKey: ['containers']}),
     })
-
-    const groups = buildContainerGroups(containers || [], preferences)
+    
+    const groups = buildContainerGroups(containers || [], preferences, t)
     
     return (
         <div className="p-6 max-w-7xl mx-auto">
             <div className="flex items-center justify-between mb-6">
                 <div>
-                    <h1 className="text-2xl font-bold">Containers</h1>
-                    <p className="text-muted-foreground">Monitor Docker container logs</p>
+                    <h1 className="text-2xl font-bold">{t('dashboard.title')}</h1>
+                    <p className="text-muted-foreground">{t('dashboard.description')}</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={() => refetch()}>
                     <RefreshCw className="h-4 w-4"/>
-                    Refresh
+                    {t('action.refresh')}
                 </Button>
             </div>
             
             {isLoading && (
                 <div className="flex items-center justify-center py-20 text-muted-foreground">
                     <RefreshCw className="h-6 w-6 animate-spin mr-2"/>
-                    Loading containers...
+                    {t('dashboard.loading')}
                 </div>
             )}
             
@@ -181,7 +195,7 @@ export function Dashboard() {
                 <Card>
                     <CardContent className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                         <ContainerIcon className="h-12 w-12 mb-4 opacity-50"/>
-                        <p>No containers found. Make sure Docker is running.</p>
+                        <p>{t('dashboard.empty')}</p>
                     </CardContent>
                 </Card>
             )}
@@ -212,7 +226,7 @@ export function Dashboard() {
                                                         </CardTitle>
                                                         {starred && (
                                                             <Badge variant="secondary" className="shrink-0">
-                                                                Pinned
+                                                                {t('dashboard.pinned')}
                                                             </Badge>
                                                         )}
                                                     </div>
@@ -227,7 +241,7 @@ export function Dashboard() {
                                                         variant="ghost"
                                                         className={starred ? 'text-amber-500 hover:text-amber-500' : 'text-muted-foreground'}
                                                         onClick={() => setPreferences(prev => updateContainerStarred(prev, c.id, !starred))}
-                                                        title={starred ? 'Unpin container' : 'Pin container'}
+                                                        title={starred ? t('dashboard.unpin') : t('dashboard.pin')}
                                                     >
                                                         <Star className={`h-4 w-4 ${starred ? 'fill-current' : ''}`}/>
                                                     </Button>
@@ -253,12 +267,12 @@ export function Dashboard() {
                                                     {c.watched ? (
                                                         <>
                                                             <EyeOff className="h-3.5 w-3.5"/>
-                                                            Unwatch
+                                                            {t('dashboard.unwatch')}
                                                         </>
                                                     ) : (
                                                         <>
                                                             <Eye className="h-3.5 w-3.5"/>
-                                                            Watch
+                                                            {t('dashboard.watch')}
                                                         </>
                                                     )}
                                                 </Button>
@@ -268,7 +282,7 @@ export function Dashboard() {
                                                     onClick={() => navigate(`/container/${c.id}`)}
                                                     className={`w-full ${!c.watched ? 'invisible pointer-events-none' : ''}`}
                                                 >
-                                                    View Logs
+                                                    {t('dashboard.viewLogs')}
                                                 </Button>
                                             </div>
                                         </CardContent>

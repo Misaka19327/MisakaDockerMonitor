@@ -4,6 +4,7 @@ import {Layout} from './components/Layout'
 import {LoginPage} from './components/LoginPage'
 import {Dashboard} from './components/Dashboard'
 import {LogViewer} from './components/LogViewer'
+import {UiPreferencesProvider} from './lib/ui-preferences'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,17 +23,19 @@ function ProtectedRoute({children}: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage/>}/>
-            <Route element={<ProtectedRoute><Layout/></ProtectedRoute>}>
-              <Route path="/" element={<Dashboard/>}/>
-              <Route path="/container/:id" element={<LogViewer/>}/>
-            </Route>
-            <Route path="*" element={<Navigate to="/" replace/>}/>
-          </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
+      <UiPreferencesProvider>
+          <QueryClientProvider client={queryClient}>
+              <BrowserRouter>
+                  <Routes>
+                      <Route path="/login" element={<LoginPage/>}/>
+                      <Route element={<ProtectedRoute><Layout/></ProtectedRoute>}>
+                          <Route path="/" element={<Dashboard/>}/>
+                          <Route path="/container/:id" element={<LogViewer/>}/>
+                      </Route>
+                      <Route path="*" element={<Navigate to="/" replace/>}/>
+                  </Routes>
+              </BrowserRouter>
+          </QueryClientProvider>
+      </UiPreferencesProvider>
   )
 }
