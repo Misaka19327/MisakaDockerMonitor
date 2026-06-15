@@ -65,6 +65,7 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
             <div className="log-entry-row px-2 py-1">
                 <button
                     type="button"
+                    title={expanded ? t('inline.toggle.collapse') : t('inline.toggle.expand')}
                     className="shrink-0 mt-0.5 text-muted-foreground transition-colors hover:text-foreground"
                     onClick={onToggle}
                 >
@@ -154,20 +155,50 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
 }
 
 function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: string }) {
+    const {t} = useUiPreferences()
+    const [expanded, setExpanded] = useState(false)
+    const raw = entry.rawContent ?? ''
+    const isMultiline = raw.includes('\n') || raw.length > 0
+
     return (
         <div className="group rounded hover:bg-muted/50 transition-colors">
             <div className="log-entry-row px-2 py-1">
-                <span className="w-3.5"/>
+                {isMultiline ? (
+                    <button
+                        type="button"
+                        title={expanded ? t('inline.toggle.collapse') : t('inline.toggle.expand')}
+                        className="shrink-0 mt-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                        onClick={() => setExpanded(!expanded)}
+                    >
+                        {expanded ? <ChevronDown className="h-3.5 w-3.5"/> : <ChevronRight className="h-3.5 w-3.5"/>}
+                    </button>
+                ) : (
+                    <span className="w-3.5"/>
+                )}
                 <span className="log-entry-line">{entry.lineNumber}</span>
                 {entry.timestamp ? (
                     <span className="log-entry-timestamp">{formatTimestamp(entry.timestamp, timezone)}</span>
                 ) : (
                     <span className="log-entry-timestamp">&nbsp;</span>
                 )}
-                <div className="log-entry-main">
-                    <pre className="log-entry-text flex-1">{entry.rawContent}</pre>
+                <div
+                    className={`log-entry-main ${isMultiline ? 'cursor-pointer select-none' : ''}`}
+                    onClick={isMultiline ? () => setExpanded(!expanded) : undefined}
+                >
+                    <span className="log-entry-message">{raw}</span>
                 </div>
             </div>
+
+            {expanded && (
+                <div className="log-entry-row px-2 pb-2">
+                    <span className="w-3.5"/>
+                    <span className="log-entry-line"/>
+                    <span className="log-entry-timestamp"/>
+                    <div className="rounded-md border border-border/70 bg-card/70 p-3">
+                        <pre className="log-entry-text">{raw}</pre>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
