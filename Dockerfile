@@ -1,5 +1,5 @@
 # Build client
-FROM oven/bun:1 AS client-builder
+FROM crpi-w68av1ccsmi71363.cn-beijing.personal.cr.aliyuncs.com/misaka19327/bun:1 AS client-builder
 WORKDIR /app/client
 COPY client/package.json client/bun.lock* ./
 RUN bun install --frozen-lockfile
@@ -7,14 +7,14 @@ COPY client/ ./
 RUN bun run build
 
 # Build server
-FROM oven/bun:1 AS server-builder
+FROM crpi-w68av1ccsmi71363.cn-beijing.personal.cr.aliyuncs.com/misaka19327/bun:1 AS server-builder
 WORKDIR /app/server
 COPY server/package.json server/bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY server/ ./
 
 # Production image
-FROM oven/bun:1-slim
+FROM crpi-w68av1ccsmi71363.cn-beijing.personal.cr.aliyuncs.com/misaka19327/bun:1-slim
 WORKDIR /app/server
 
 # Copy server source + deps
