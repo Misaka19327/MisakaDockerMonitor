@@ -162,7 +162,7 @@
     display: grid;
     grid-template-columns: 0.875rem 2.25rem max-content minmax(0, 1fr) auto;
     gap: 0.5rem;
-    align-items: start;
+    align-items: center;
 }
 
 .log-entry-line {

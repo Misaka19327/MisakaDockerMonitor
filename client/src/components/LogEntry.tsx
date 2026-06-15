@@ -66,7 +66,7 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
                 <button
                     type="button"
                     title={expanded ? t('inline.toggle.collapse') : t('inline.toggle.expand')}
-                    className="shrink-0 mt-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
                     onClick={onToggle}
                 >
                     {expanded ? <ChevronDown className="h-3.5 w-3.5"/> : <ChevronRight className="h-3.5 w-3.5"/>}
@@ -167,7 +167,7 @@ function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: s
                     <button
                         type="button"
                         title={expanded ? t('inline.toggle.collapse') : t('inline.toggle.expand')}
-                        className="shrink-0 mt-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                        className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
                         onClick={() => setExpanded(!expanded)}
                     >
                         {expanded ? <ChevronDown className="h-3.5 w-3.5"/> : <ChevronRight className="h-3.5 w-3.5"/>}
