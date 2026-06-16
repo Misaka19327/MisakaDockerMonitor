@@ -1,5 +1,5 @@
 import type {ParsedLog} from '../log-parser'
-import {nowISO} from '../utils'
+import {normalizeLogTimestamp, nowISO} from '../utils'
 
 export interface Service {
     uuid: string
@@ -132,7 +132,7 @@ export function parsedLogToEntry(
         containerId,
         containerName,
         instanceId,
-        timestamp: parsed.timestamp,
+        timestamp: normalizeLogTimestamp(parsed.timestamp),
         lineNumber,
         rawContent: parsed.raw,
         isJson: parsed.isJson,
@@ -174,7 +174,7 @@ export function rawLogToEntry(
 export function parsedLogToPatch(id: number, parsed: ParsedLog): ParsedLogPatch {
     return {
         id,
-        timestamp: parsed.timestamp,
+        timestamp: normalizeLogTimestamp(parsed.timestamp),
         isJson: parsed.isJson,
         parsedJson: parsed.json ? JSON.stringify(parsed.json) : null,
         level: parsed.level,

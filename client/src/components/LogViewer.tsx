@@ -1,12 +1,14 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {useNavigate, useParams} from 'react-router-dom'
-import {useQuery, useQueryClient} from '@tanstack/react-query'
+import {useQuery} from '@tanstack/react-query'
 import {api} from '../lib/api'
 import {markContainerOpened} from '../lib/container-preferences'
 import type {Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
-import {formatInstanceLabel} from '../lib/time'
-import {getDistinctLevels, getLogFieldValue, type ResolvedLogEntry, resolveLogEntry} from '../lib/log-entry'
+import {useLogPagination} from '../hooks/useLogPagination'
+import {usePullToLoad} from '../hooks/usePullToLoad'
+import {formatInstanceLabel, type TimeRange} from '../lib/time'
+import {getLogFieldValue, type ResolvedLogEntry} from '../lib/log-entry'
 import {Button} from './ui/button'
 import {Input} from './ui/input'
 import {Badge} from './ui/badge'
@@ -15,6 +17,7 @@ import {Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle, Dra
 import {LogEntryView} from './LogEntry'
 import {GroupPanel} from './GroupPanel'
 import {InlineGroup} from './InlineGroup'
+import {TimeFilter} from './TimeFilter'
 import {useUiPreferences} from '../lib/ui-preferences'
 import {
     ArrowDown,
@@ -30,6 +33,7 @@ import {
     HardDrive,
     Hash,
     Heart,
+    Loader2,
     MemoryStick,
     Network,
     Pause,
@@ -40,37 +44,41 @@ import {
     Shield,
 } from 'lucide-react'
 
-const MAX_PUSHED_ENTRIES = 2000
-
 export function LogViewer() {
     const {id: serviceUuid} = useParams<{ id: string }>()
     const navigate = useNavigate()
-    const queryClient = useQueryClient()
     const {t} = useUiPreferences()
 
     const [search, setSearch] = useState('')
     const [searchInput, setSearchInput] = useState('')
-    const [level, setLevel] = useState('')
     const [instanceId, setInstanceId] = useState('')
+    const [timeRange, setTimeRange] = useState<TimeRange>({})
     const [autoScroll, setAutoScroll] = useState(true)
     const [paused, setPaused] = useState(false)
     const [reverseOrder, setReverseOrder] = useState(false)
     const [showGroupPanel, setShowGroupPanel] = useState(false)
     const [showScrollTop, setShowScrollTop] = useState(false)
+    const [loadOlderArmed, setLoadOlderArmed] = useState(false)
     const [groupField, setGroupField] = useState('level')
     const [inlineGrouping, setInlineGrouping] = useState(false)
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
     const [envDrawerOpen, setEnvDrawerOpen] = useState(false)
 
     const scrollRef = useRef<HTMLDivElement>(null)
-    const bottomRef = useRef<HTMLDivElement>(null)
-    const topRef = useRef<HTMLDivElement>(null)
-    
-    // Pushed entries from SSE (keyed by id for dedup)
-    const [pushedEntries, setPushedEntries] = useState<Map<number, LogEntry>>(new Map())
-    
+
     // SSE: real-time status + log push
     const [sseStatus, setSseStatus] = useState<Partial<Container> | null>(null)
+
+    const {data: appConfig} = useQuery({queryKey: ['app-config'], queryFn: () => api.config.get()})
+
+    const pagination = useLogPagination(serviceUuid, {
+        search,
+        instanceId,
+        timeRange,
+        timezone: appConfig?.timezone,
+        paused,
+    })
+
     useContainerStatusStream(
         serviceUuid,
         useCallback((data: Record<string, unknown>) => {
@@ -78,26 +86,9 @@ export function LogViewer() {
         }, []),
         useCallback((entries: LogEntry[]) => {
             if (entries.length === 0) return
-
-            setPushedEntries(prev => {
-                const next = new Map(prev)
-                for (const entry of entries) {
-                    if (entry.id == null || next.has(entry.id)) continue
-                    next.set(entry.id, entry)
-                }
-
-                while (next.size > MAX_PUSHED_ENTRIES) {
-                    const oldestKey = next.keys().next().value
-                    if (oldestKey == null) break
-                    next.delete(oldestKey)
-                }
-
-                return next
-            })
-        }, []),
+            pagination.pushEntries(entries)
+        }, [pagination.pushEntries]),
     )
-    
-    const {data: appConfig} = useQuery({queryKey: ['app-config'], queryFn: () => api.config.get()})
 
     const {data: instances} = useQuery({
         queryKey: ['instances', serviceUuid],
@@ -125,49 +116,22 @@ export function LogViewer() {
         }
     }, [instances])
 
-    const {data: logResult, isLoading} = useQuery({
-        queryKey: ['logs', serviceUuid, search, instanceId],
-        queryFn: () => api.logs.query(serviceUuid!, {
-            search: search || undefined,
-            instanceId: instanceId || undefined,
-            limit: 500,
-        }),
-        enabled: !!serviceUuid,
-        refetchInterval: paused ? false : 10000,
-    })
-
     const container = useMemo(() => {
-        const base = logResult?.container
+        const base = pagination.container
         if (!base && !sseStatus) return null
         return {...(base || {}), ...sseStatus} as Container
-    }, [logResult?.container, sseStatus])
-    
-    // Merge pull + push, dedup by id
-    const entries = useMemo(() => {
-        const pullEntries = logResult?.entries || []
-        const merged = new Map<number, LogEntry>()
-        for (const e of pullEntries) {
-            if (e.id != null) merged.set(e.id, e)
-        }
-        for (const [id, e] of pushedEntries) {
-            if (!merged.has(id)) merged.set(id, e)
-        }
-        return Array.from(merged.values())
-            .sort((a, b) => (a.id || 0) - (b.id || 0))
-            .map(resolveLogEntry)
-    }, [logResult?.entries, pushedEntries])
+    }, [pagination.container, sseStatus])
 
-    const levels = useMemo(() => getDistinctLevels(entries), [entries])
-    
+    const entries = pagination.entries
+
     // Client-side filter for pushed entries
     const filteredEntries = useMemo(() => {
-        if (!search && !level) return entries
+        if (!search) return entries
         return entries.filter(e => {
-            if (level && e.level !== level) return false
             if (search && !e.content.includes(search) && !e.rawContent.includes(search)) return false
             return true
         })
-    }, [entries, search, level])
+    }, [entries, search])
     
     const hasJsonLogs = useMemo(() => filteredEntries.some(e => e.isJson), [filteredEntries])
     
@@ -214,19 +178,110 @@ export function LogViewer() {
         })
     }, [])
 
+    // --- Scroll-position bookkeeping ---------------------------------------
+    // "Tail" = the end where newest entries arrive: bottom in normal order,
+    // top in reverse order. We track whether the user is pinned near the tail
+    // so that only genuine tail growth (newer logs) auto-follows; loading
+    // older entries prepends to the head and must NOT yank the viewport.
+    const isPinnedToTail = useRef(true)
+    // Snapshot of entry count before a render, to detect head vs tail growth.
+    const prevEntryCountRef = useRef(0)
+    // Snapshot of scrollHeight before fetching older entries, for anchor restore.
+    const preFetchScrollHeightRef = useRef<number | null>(null)
+
+    // Reset pin-tracking when filters/order change so we re-pin to the tail.
     useEffect(() => {
-        if (!autoScroll) return
-        if (reverseOrder && topRef.current) topRef.current.scrollIntoView({behavior: 'smooth'})
-        else if (!reverseOrder && bottomRef.current) bottomRef.current.scrollIntoView({behavior: 'smooth'})
-    }, [entries.length, autoScroll, reverseOrder])
-    
+        isPinnedToTail.current = true
+        prevEntryCountRef.current = filteredEntries.length
+        // Jump to the tail on filter change so the newest window is in view.
+        requestAnimationFrame(() => {
+            const el = scrollRef.current
+            if (!el) return
+            el.scrollTop = reverseOrder ? 0 : el.scrollHeight
+        })
+    }, [search, instanceId, timeRange, reverseOrder])
+
+    // Follow the tail only when auto-follow is on, user is pinned, and the list
+    // grew at the tail (newer logs). Loading older entries also grows the list,
+    // but the user is then at the head (not pinned), so this stays inert.
+    useEffect(() => {
+        const grew = filteredEntries.length - prevEntryCountRef.current
+        prevEntryCountRef.current = filteredEntries.length
+        if (grew <= 0 || !autoScroll || !isPinnedToTail.current) return
+        // Tail grew (newer logs arrived): keep the viewport pinned.
+        const el = scrollRef.current
+        if (!el) return
+        if (reverseOrder) {
+            // Newest at top: stay at top.
+            el.scrollTop = 0
+        } else {
+            // Newest at bottom: stay at bottom.
+            el.scrollTop = el.scrollHeight
+        }
+    }, [filteredEntries.length, reverseOrder, autoScroll])
+
     const handleScroll = useCallback(() => {
-        const el = scrollRef.current;
-        if (!el) return;
+        const el = scrollRef.current
+        if (!el) return
         setShowScrollTop(el.scrollTop > 300)
-    }, [])
+        const distanceFromTail = reverseOrder
+            ? el.scrollTop
+            : el.scrollHeight - el.scrollTop - el.clientHeight
+        isPinnedToTail.current = distanceFromTail < 50
+    }, [reverseOrder])
+
+    // Fetch older entries while preserving the user's scroll position:
+    // capture scrollHeight before, restore the delta after prepend.
+    const fetchOlder = useCallback(() => {
+        if (!pagination.hasOlder || pagination.loadingOlder) return
+        const el = scrollRef.current
+        if (el) preFetchScrollHeightRef.current = el.scrollHeight
+        pagination.fetchOlder()
+    }, [pagination.fetchOlder, pagination.hasOlder, pagination.loadingOlder])
+
+    // After older entries land, compensate scrollTop so the viewport stays put.
+    // Bound to pageCount (history pages) — NOT entry length — so live SSE pushes
+    // don't trigger spurious scroll compensation.
+    useEffect(() => {
+        if (preFetchScrollHeightRef.current == null) return
+        const el = scrollRef.current
+        if (!el) return
+        const prev = preFetchScrollHeightRef.current
+        preFetchScrollHeightRef.current = null
+        requestAnimationFrame(() => {
+            if (reverseOrder) {
+                // Older entries appended at the bottom (reverse view): keep top position.
+                // No compensation needed since growth is below the viewport.
+            } else {
+                // Older entries prepended at the top: shift down by the added height.
+                el.scrollTop += el.scrollHeight - prev
+            }
+        })
+    }, [pagination.pageCount, reverseOrder])
+
+    // --- Load-older sentinels ----------------------------------------------
+    // Normal order: reaching the top loads older. Reverse order: reaching the
+    // bottom loads older. The button remains as a visible manual fallback.
+    const topPull = usePullToLoad({
+        rootRef: scrollRef,
+        enabled: !reverseOrder && pagination.hasOlder,
+        armed: loadOlderArmed,
+        loading: pagination.loadingOlder,
+        onTrigger: fetchOlder,
+    })
+    const bottomPull = usePullToLoad({
+        rootRef: scrollRef,
+        enabled: reverseOrder && pagination.hasOlder,
+        armed: loadOlderArmed,
+        loading: pagination.loadingOlder,
+        onTrigger: fetchOlder,
+    })
+
     const scrollToTop = useCallback(() => {
         scrollRef.current?.scrollTo({top: 0, behavior: 'smooth'})
+    }, [])
+    const armLoadOlder = useCallback(() => {
+        setLoadOlderArmed(true)
     }, [])
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
@@ -311,16 +366,14 @@ export function LogViewer() {
                         <div className="relative flex-1"><Search
                             className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"/><Input
                             value={searchInput} onChange={e => setSearchInput(e.target.value)}
-                            placeholder={t('viewer.searchLogs')} className="pl-9 h-9"/></div>
+                            placeholder={t('viewer.searchLogs')} className="pl-9 h-9 w-full"/></div>
                         <Button type="submit" size="sm" variant="outline">{t('action.search')}</Button>
                         {search && (<Button size="sm" variant="ghost" onClick={() => {
                             setSearch('');
                             setSearchInput('')
                         }}>{t('action.clear')}</Button>)}
                     </form>
-                    <Select value={level} onChange={e => setLevel(e.target.value)}
-                            options={levels.map(l => ({value: l, label: l}))} placeholder={t('viewer.allLevels')}
-                            className="w-36"/>
+                    <TimeFilter value={timeRange} onChange={setTimeRange} timezone={appConfig?.timezone}/>
                     <Select value={instanceId} onChange={e => setInstanceId(e.target.value)}
                             options={(instances || []).map(inst => ({
                                 value: inst.id,
@@ -337,10 +390,8 @@ export function LogViewer() {
                             <ArrowDown
                                 className={`h-4 w-4 ${autoScroll ? 'text-primary' : 'text-muted-foreground'}`}/>)}
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => {
-                        queryClient.invalidateQueries({queryKey: ['logs', serviceUuid]});
-                        setPushedEntries(new Map())
-                    }} title={t('viewer.refreshLogs')}><RefreshCw className="h-4 w-4"/></Button>
+                    <Button variant="ghost" size="icon" onClick={pagination.invalidate}
+                            title={t('viewer.refreshLogs')}><RefreshCw className="h-4 w-4"/></Button>
                 </div>
                 {hasJsonLogs && (<div className="mt-2">
                     <button
@@ -358,19 +409,44 @@ export function LogViewer() {
                         </div>)}
                 </div>)}
                 <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                    <span>{t('viewer.totalEntries', {count: logResult?.total ?? 0})}</span>
-                    <span>{t('viewer.liveWindow', {count: pushedEntries.size})}</span>
+                    <span>{t('viewer.totalEntries', {count: pagination.total})}</span>
                     {search && <span>{t('viewer.filteredBy', {value: search})}</span>}
-                    {level && <span>{t('viewer.levelLabel', {value: level})}</span>}
+                    {(timeRange.startTime || timeRange.endTime) && (
+                        <span>
+                            {[
+                                timeRange.startTime && timeRange.startTime.replace('T', ' '),
+                                timeRange.endTime && timeRange.endTime.replace('T', ' '),
+                            ].filter(Boolean).join(' ~ ')}
+                        </span>
+                    )}
                 </div>
             </div>
             <div className="flex-1 overflow-hidden relative">
-                <div ref={scrollRef} className="h-full overflow-auto px-2 py-2" onScroll={handleScroll}>
-                    <div ref={topRef}/>
-                    {isLoading && filteredEntries.length === 0 && (
+                <div
+                    ref={scrollRef}
+                    className="h-full overflow-auto px-2 py-2"
+                    onPointerDown={armLoadOlder}
+                    onTouchStart={armLoadOlder}
+                    onWheel={armLoadOlder}
+                    onScroll={handleScroll}
+                >
+                    {/* Top pull indicator (normal order: pull here to load older) */}
+                    {!reverseOrder && pagination.hasOlder && (
+                        <PullIndicator
+                            api={topPull}
+                            hint={t('viewer.pullToLoad.hint')}
+                            loadingLabel={t('viewer.pullToLoad.loading')}
+                        />
+                    )}
+                    {/* End-of-history notice when no older pages remain (normal order, at top) */}
+                    {!reverseOrder && !pagination.hasOlder && filteredEntries.length > 0 && (
+                        <div
+                            className="py-2 text-center text-[11px] text-muted-foreground/70">{t('viewer.pullToLoad.noMore')}</div>
+                    )}
+                    {pagination.isInitialLoading && filteredEntries.length === 0 && (
                         <div className="flex items-center justify-center py-20 text-muted-foreground"><RefreshCw
                             className="h-5 w-5 animate-spin mr-2"/>{t('viewer.loading')}</div>)}
-                    {!isLoading && filteredEntries.length === 0 && (
+                    {!pagination.isInitialLoading && filteredEntries.length === 0 && (
                         <div
                             className="flex items-center justify-center py-20 text-muted-foreground">{t('viewer.noLogs')}</div>)}
                     {inlineGrouping && groupedEntries ? (<div>{groupedEntries.map((group, gi) => (
@@ -382,12 +458,52 @@ export function LogViewer() {
                                               timezone={appConfig?.timezone}/>))}</div>
                         </InlineGroup>))}</div>) : (<div className="space-y-0.5">{displayEntries.map((entry, i) => (
                         <LogEntryView key={entry.id || i} entry={entry} timezone={appConfig?.timezone}/>))}</div>)}
-                    <div ref={bottomRef}/>
+                    {/* Bottom pull indicator (reverse order: older entries live here) */}
+                    {reverseOrder && pagination.hasOlder && (
+                        <PullIndicator
+                            api={bottomPull}
+                            hint={t('viewer.pullToLoad.hint')}
+                            loadingLabel={t('viewer.pullToLoad.loading')}
+                        />
+                    )}
+                    {reverseOrder && !pagination.hasOlder && filteredEntries.length > 0 && (
+                        <div
+                            className="py-2 text-center text-[11px] text-muted-foreground/70">{t('viewer.pullToLoad.noMore')}</div>
+                    )}
                 </div>
                 {showScrollTop && (<button onClick={scrollToTop}
                                            className="fixed bottom-6 right-6 z-50 h-10 w-10 rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90 flex items-center justify-center transition-opacity"
                                            title={t('viewer.scrollTop')}><ArrowUpIcon className="h-5 w-5"/></button>)}
             </div>
+        </div>
+    )
+}
+
+function PullIndicator({api, hint, loadingLabel}: {
+    api: {
+        sentinelRef: React.RefObject<HTMLDivElement | null>
+        loading: boolean
+        active: boolean
+        trigger: () => void
+    }
+    hint: string
+    loadingLabel: string
+}) {
+    const {sentinelRef, loading, active, trigger} = api
+    return (
+        <div ref={sentinelRef} className="flex min-h-8 items-center justify-center py-1">
+            <button
+                type="button"
+                onClick={trigger}
+                disabled={!active}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-70"
+            >
+                {loading ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin"/>{loadingLabel}</>
+                ) : (
+                    <><ChevronDown className="h-3.5 w-3.5"/>{hint}</>
+                )}
+            </button>
         </div>
     )
 }

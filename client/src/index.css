@@ -244,13 +244,15 @@
 }
 
 .log-entry-message {
-    /* Single-line summary: other components keep their width, message fills
-       remaining space and ellipses when truncated. */
     flex: 1 1 0%;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.log-entry-main:has(.log-entry-sql-chip) .log-entry-message {
+    flex: 0 1 auto;
 }
 
 .log-entry-text,
@@ -274,9 +276,9 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    min-width: min(18rem, 44vw);
     max-width: min(52rem, 62vw);
-    flex: 0 0 auto;
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     border: 1px solid color-mix(in oklch, var(--primary) 18%, transparent);
     background: color-mix(in oklch, var(--primary) 10%, var(--background));

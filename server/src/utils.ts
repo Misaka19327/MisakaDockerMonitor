@@ -118,6 +118,27 @@ export function nowISO(): string {
   return formatDateInTimeZone(new Date(), config.timezone)
 }
 
+export function normalizeLogTimestamp(value: string | null): string | null {
+  if (!value) return null
+
+  const trimmed = value.trim()
+  if (!trimmed) return null
+
+  if (/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)) {
+    const parsed = new Date(trimmed)
+    if (!Number.isNaN(parsed.getTime())) {
+      return formatDateInTimeZone(parsed, config.timezone)
+    }
+  }
+
+  const normalized = trimmed.replace('T', ' ')
+  if (/^\d{4}[-/]\d{2}[-/]\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(normalized)) {
+    return normalized.replace(/\//g, '-')
+  }
+
+  return trimmed
+}
+
 export function daysAgoISO(days: number): string {
   const now = new Date()
   const parts = getZonedParts(now, config.timezone)
