@@ -7,6 +7,8 @@ services:
     volumes:
       # Mount Docker socket to access host Docker
       - /var/run/docker.sock:/var/run/docker.sock
+      # Expose host compose projects for compose path validation and updates
+      - /data:/data
       # Persist data
       - monitor-data:/app/data
     environment:

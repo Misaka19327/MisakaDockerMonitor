@@ -5,6 +5,7 @@ import {LoginPage} from './components/LoginPage'
 import {Dashboard} from './components/Dashboard'
 import {LogViewer} from './components/LogViewer'
 import {UiPreferencesProvider} from './lib/ui-preferences'
+import {Toaster} from 'sonner'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +36,7 @@ export default function App() {
                       <Route path="*" element={<Navigate to="/" replace/>}/>
                   </Routes>
               </BrowserRouter>
+              <Toaster richColors position="top-right"/>
           </QueryClientProvider>
       </UiPreferencesProvider>
   )

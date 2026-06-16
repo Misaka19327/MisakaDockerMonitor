@@ -20,6 +20,7 @@ import {InlineGroup} from './InlineGroup'
 import {TimeFilter} from './TimeFilter'
 import {useUiPreferences} from '../lib/ui-preferences'
 import {copyToClipboard} from '../lib/clipboard'
+import {toast} from 'sonner'
 import {
     ArrowDown,
     ArrowLeft,
@@ -30,7 +31,6 @@ import {
     ChevronDown,
     ChevronRight,
     Clock,
-    Copy,
     Cpu,
     Group,
     HardDrive,
@@ -663,7 +663,7 @@ function EnvEditor({
 
             <div className="min-h-0 flex-1 overflow-auto">
                 {env.length > 0 ? (
-                    <div className="flex flex-col gap-1">
+                    <div className="flex flex-col gap-1.5">
                         {env.map((line, index) => (
                             <EnvRow
                                 key={`${line}-${index}`}
@@ -684,33 +684,35 @@ function EnvEditor({
                 )}
             </div>
 
-            <div className="rounded-md border bg-card/60 p-3">
-                <div className="mb-2 text-sm font-medium">{t('viewer.env.add')}</div>
-                <div className="grid grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,1fr)_auto] gap-2">
-                    <Input
-                        value={newKey}
-                        onChange={event => setNewKey(event.target.value)}
-                        placeholder={t('viewer.env.key')}
-                        className="font-mono"
-                        disabled={!canEdit || pendingAction}
-                    />
-                    <Input
-                        value={newValue}
-                        onChange={event => setNewValue(event.target.value)}
-                        placeholder={t('viewer.env.value')}
-                        className="font-mono"
-                        disabled={!canEdit || pendingAction}
-                    />
-                    <Button type="button" size="sm" onClick={addEnv}
-                            disabled={!canEdit || pendingAction || !newKey.trim()}>
-                        <Plus className="h-4 w-4"/>
-                        {t('viewer.env.add')}
-                    </Button>
+            {canEdit ? (
+                <div className="rounded-md border bg-card/60 p-3">
+                    <div className="mb-2 text-sm font-medium">{t('viewer.env.add')}</div>
+                    <div className="grid grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,1fr)_auto] gap-2">
+                        <Input
+                            value={newKey}
+                            onChange={event => setNewKey(event.target.value)}
+                            placeholder={t('viewer.env.key')}
+                            className="font-mono"
+                            disabled={pendingAction}
+                        />
+                        <Input
+                            value={newValue}
+                            onChange={event => setNewValue(event.target.value)}
+                            placeholder={t('viewer.env.value')}
+                            className="font-mono"
+                            disabled={pendingAction}
+                        />
+                        <Button type="button" size="sm" onClick={addEnv}
+                                disabled={pendingAction || !newKey.trim()}>
+                            <Plus className="h-4 w-4"/>
+                            {t('viewer.env.add')}
+                        </Button>
+                    </div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                        {mutationMessage || t('viewer.env.doubleClickCopy')}
+                    </div>
                 </div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                    {mutationMessage || (canEdit ? t('viewer.env.doubleClickCopy') : t('viewer.env.pathPending'))}
-                </div>
-            </div>
+            ) : null}
         </div>
     )
 }
@@ -754,7 +756,12 @@ function EnvRow({
             clickTimerRef.current = null
         }
         const copied = await copyToClipboard(line)
-        onMessage(copied ? t('viewer.env.copied') : t('viewer.env.copyFailed'))
+        if (copied) {
+            toast.success(t('viewer.env.copied'))
+            onMessage('')
+        } else {
+            toast.error(t('viewer.env.copyFailed'))
+        }
     }, [line, onMessage, t])
 
     const enterEdit = useCallback(() => {
@@ -830,17 +837,13 @@ function EnvRow({
     return (
         <button
             type="button"
-            className="env-entry-row group rounded-md border bg-background/70 px-3 py-2 text-left transition-colors hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-75"
+            className="env-entry-row group rounded-md border bg-background/70 px-3 py-2.5 text-left transition-colors hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-75"
             onClick={enterEdit}
             onDoubleClick={copyLine}
         >
-            <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="env-entry-key break-all">{key}</div>
-                    {value && <div className="env-entry-value mt-0.5 break-all">{value}</div>}
-                </div>
-                <Copy
-                    className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"/>
+            <div className="min-w-0">
+                <div className="env-entry-key break-all">{key}</div>
+                {value && <div className="env-entry-value mt-1 break-all">{value}</div>}
             </div>
         </button>
     )

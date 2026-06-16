@@ -1,4 +1,4 @@
-import {useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {Badge} from './ui/badge'
 import {SqlView} from './SqlView'
 import {ChevronDown, ChevronRight} from 'lucide-react'
@@ -7,6 +7,7 @@ import type {ResolvedLogEntry} from '../lib/log-entry'
 import {summarizeSql} from '../lib/sql-summary'
 import {useUiPreferences} from '../lib/ui-preferences'
 import {copyToClipboard} from '../lib/clipboard'
+import {toast} from 'sonner'
 
 function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'destructive' | 'secondary' {
     if (!level) return 'secondary'
@@ -38,6 +39,32 @@ export function LogEntryView({entry, timezone}: { entry: ResolvedLogEntry; timez
     return <TextLogEntry entry={entry} timezone={timezone}/>
 }
 
+function useSingleAndDoubleClick(singleClick: () => void, doubleClick: () => void) {
+    const clickTimerRef = useRef<number | null>(null)
+
+    useEffect(() => () => {
+        if (clickTimerRef.current != null) window.clearTimeout(clickTimerRef.current)
+    }, [])
+
+    const handleClick = useCallback(() => {
+        if (clickTimerRef.current != null) window.clearTimeout(clickTimerRef.current)
+        clickTimerRef.current = window.setTimeout(() => {
+            singleClick()
+            clickTimerRef.current = null
+        }, 180)
+    }, [singleClick])
+
+    const handleDoubleClick = useCallback(() => {
+        if (clickTimerRef.current != null) {
+            window.clearTimeout(clickTimerRef.current)
+            clickTimerRef.current = null
+        }
+        doubleClick()
+    }, [doubleClick])
+
+    return {handleClick, handleDoubleClick}
+}
+
 function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone}: {
     entry: ResolvedLogEntry
     expanded: boolean
@@ -60,10 +87,15 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     const duration = (parsed as any).duration as string | undefined
     const span = (parsed as any).span as string | undefined
     const trace = (parsed as any).trace as string | undefined
-    const copyRawLog = () => void copyToClipboard(entry.rawContent ?? entry.content ?? '')
+    const copyRawLog = useCallback(async () => {
+        const copied = await copyToClipboard(entry.rawContent ?? entry.content ?? '')
+        if (copied) toast.success(t('viewer.copy.copied'))
+        else toast.error(t('viewer.copy.failed'))
+    }, [entry.content, entry.rawContent, t])
+    const {handleClick: handleToggleClick, handleDoubleClick: handleCopyDoubleClick} = useSingleAndDoubleClick(onToggle, copyRawLog)
     
     return (
-        <div className="group rounded hover:bg-muted/50 transition-colors" onDoubleClick={copyRawLog}>
+        <div className="group rounded hover:bg-muted/50 transition-colors">
             <div className="log-entry-row px-2 py-1">
                 <button
                     type="button"
@@ -79,7 +111,11 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
                 ) : (
                     <span className="log-entry-timestamp">&nbsp;</span>
                 )}
-                <div className="log-entry-main cursor-pointer select-none" onClick={onToggle}>
+                <div
+                    className="log-entry-main cursor-pointer select-none"
+                    onClick={handleToggleClick}
+                    onDoubleClick={handleCopyDoubleClick}
+                >
                     <div className="log-entry-prefix">
                         {level && <Badge variant={levelVariant(level)}
                                          className="log-entry-level-badge shrink-0">{level}</Badge>}
@@ -161,17 +197,23 @@ function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: s
     const [expanded, setExpanded] = useState(false)
     const raw = entry.rawContent ?? ''
     const isMultiline = raw.includes('\n') || raw.length > 0
-    const copyRawLog = () => void copyToClipboard(raw)
+    const copyRawLog = useCallback(async () => {
+        const copied = await copyToClipboard(raw)
+        if (copied) toast.success(t('viewer.copy.copied'))
+        else toast.error(t('viewer.copy.failed'))
+    }, [raw, t])
+    const toggleExpanded = useCallback(() => setExpanded(current => !current), [])
+    const {handleClick: handleToggleClick, handleDoubleClick: handleCopyDoubleClick} = useSingleAndDoubleClick(toggleExpanded, copyRawLog)
 
     return (
-        <div className="group rounded hover:bg-muted/50 transition-colors" onDoubleClick={copyRawLog}>
+        <div className="group rounded hover:bg-muted/50 transition-colors">
             <div className="log-entry-row px-2 py-1">
                 {isMultiline ? (
                     <button
                         type="button"
                         title={expanded ? t('inline.toggle.collapse') : t('inline.toggle.expand')}
                         className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-                        onClick={() => setExpanded(!expanded)}
+                        onClick={toggleExpanded}
                     >
                         {expanded ? <ChevronDown className="h-3.5 w-3.5"/> : <ChevronRight className="h-3.5 w-3.5"/>}
                     </button>
@@ -186,7 +228,8 @@ function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: s
                 )}
                 <div
                     className={`log-entry-main ${isMultiline ? 'cursor-pointer select-none' : ''}`}
-                    onClick={isMultiline ? () => setExpanded(!expanded) : undefined}
+                    onClick={isMultiline ? handleToggleClick : undefined}
+                    onDoubleClick={handleCopyDoubleClick}
                 >
                     <span className="log-entry-message">{raw}</span>
                 </div>

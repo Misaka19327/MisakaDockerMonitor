@@ -297,7 +297,7 @@ async function validateComposePath(composePath: string): Promise<{
         }
 
         const content = await readFile(trimmed, 'utf8')
-        if (!/^\s*services\s*:/m.test(content)) {
+        if (!hasComposeServicesSection(content)) {
             return {valid: false, exists: true, composeFile, message: 'Compose file must contain a services section'}
         }
 
@@ -305,6 +305,21 @@ async function validateComposePath(composePath: string): Promise<{
     } catch {
         return {valid: false, exists: false, composeFile, message: 'Compose path does not exist or cannot be read'}
     }
+}
+
+function hasComposeServicesSection(content: string): boolean {
+    const lines = content.split(/\r?\n/)
+    const servicesIndex = lines.findIndex(line => /^services\s*:\s*(?:#.*)?$/.test(line))
+    if (servicesIndex < 0) return false
+
+    for (const line of lines.slice(servicesIndex + 1)) {
+        if (!line.trim() || line.trim().startsWith('#')) continue
+        const indent = line.match(/^\s*/)?.[0].length ?? 0
+        if (indent === 0) return false
+        if (/^\s{2,}[\w.-]+\s*:/.test(line)) return true
+    }
+
+    return false
 }
 
 function extractStats(stats: any, info: any) {
