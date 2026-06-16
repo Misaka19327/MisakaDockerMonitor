@@ -4,3 +4,4 @@ data/
 .env
 *.db
 *.sqlite
+client/tsconfig.tsbuildinfo
