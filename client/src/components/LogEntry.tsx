@@ -6,6 +6,7 @@ import {formatTimestamp} from '../lib/time'
 import type {ResolvedLogEntry} from '../lib/log-entry'
 import {summarizeSql} from '../lib/sql-summary'
 import {useUiPreferences} from '../lib/ui-preferences'
+import {copyToClipboard} from '../lib/clipboard'
 
 function levelVariant(level: string | null): 'default' | 'info' | 'warning' | 'destructive' | 'secondary' {
     if (!level) return 'secondary'
@@ -59,9 +60,10 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     const duration = (parsed as any).duration as string | undefined
     const span = (parsed as any).span as string | undefined
     const trace = (parsed as any).trace as string | undefined
+    const copyRawLog = () => void copyToClipboard(entry.rawContent ?? entry.content ?? '')
     
     return (
-        <div className="group rounded hover:bg-muted/50 transition-colors">
+        <div className="group rounded hover:bg-muted/50 transition-colors" onDoubleClick={copyRawLog}>
             <div className="log-entry-row px-2 py-1">
                 <button
                     type="button"
@@ -159,9 +161,10 @@ function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: s
     const [expanded, setExpanded] = useState(false)
     const raw = entry.rawContent ?? ''
     const isMultiline = raw.includes('\n') || raw.length > 0
+    const copyRawLog = () => void copyToClipboard(raw)
 
     return (
-        <div className="group rounded hover:bg-muted/50 transition-colors">
+        <div className="group rounded hover:bg-muted/50 transition-colors" onDoubleClick={copyRawLog}>
             <div className="log-entry-row px-2 py-1">
                 {isMultiline ? (
                     <button

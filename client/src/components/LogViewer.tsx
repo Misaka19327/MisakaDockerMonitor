@@ -3,7 +3,7 @@ import {useNavigate, useParams} from 'react-router-dom'
 import {useQuery} from '@tanstack/react-query'
 import {api} from '../lib/api'
 import {markContainerOpened} from '../lib/container-preferences'
-import type {Container, LogEntry} from '../types'
+import type {ComposePathValidationResult, Container, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {useLogPagination} from '../hooks/useLogPagination'
 import {usePullToLoad} from '../hooks/usePullToLoad'
@@ -19,15 +19,18 @@ import {GroupPanel} from './GroupPanel'
 import {InlineGroup} from './InlineGroup'
 import {TimeFilter} from './TimeFilter'
 import {useUiPreferences} from '../lib/ui-preferences'
+import {copyToClipboard} from '../lib/clipboard'
 import {
     ArrowDown,
     ArrowLeft,
     ArrowUp as ArrowUpIcon,
     ArrowUpDown,
     Braces,
+    Check,
     ChevronDown,
     ChevronRight,
     Clock,
+    Copy,
     Cpu,
     Group,
     HardDrive,
@@ -38,10 +41,14 @@ import {
     Network,
     Pause,
     Play,
+    Plus,
     RefreshCw,
     RotateCcw,
+    Save,
     Search,
     Shield,
+    Trash2,
+    X,
 } from 'lucide-react'
 
 export function LogViewer() {
@@ -63,6 +70,10 @@ export function LogViewer() {
     const [inlineGrouping, setInlineGrouping] = useState(false)
     const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
     const [envDrawerOpen, setEnvDrawerOpen] = useState(false)
+    const [composePath, setComposePath] = useState('')
+    const [composeValidation, setComposeValidation] = useState<ComposePathValidationResult | null>(null)
+    const [composeValidationLoading, setComposeValidationLoading] = useState(false)
+    const [envMutationMessage, setEnvMutationMessage] = useState('')
 
     const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -122,6 +133,12 @@ export function LogViewer() {
         return {...(base || {}), ...sseStatus} as Container
     }, [pagination.container, sseStatus])
 
+    useEffect(() => {
+        if (!container?.composePath) return
+        setComposePath(container.composePath)
+        setComposeValidation(null)
+    }, [container?.composePath])
+
     const entries = pagination.entries
 
     // Client-side filter for pushed entries
@@ -132,9 +149,9 @@ export function LogViewer() {
             return true
         })
     }, [entries, search])
-    
+
     const hasJsonLogs = useMemo(() => filteredEntries.some(e => e.isJson), [filteredEntries])
-    
+
     const displayEntries = useMemo(() => reverseOrder ? [...filteredEntries].reverse() : filteredEntries, [filteredEntries, reverseOrder])
 
     const groupedEntries = useMemo(() => {
@@ -287,6 +304,51 @@ export function LogViewer() {
         e.preventDefault();
         setSearch(searchInput)
     }
+    const validateComposePath = useCallback(async () => {
+        if (!serviceUuid || !composePath.trim()) {
+            setComposeValidation({
+                valid: false,
+                exists: false,
+                composeFile: false,
+                message: t('viewer.env.pathRequired')
+            })
+            return
+        }
+        setComposeValidationLoading(true)
+        setEnvMutationMessage('')
+        try {
+            const result = await api.containers.validateComposePath(serviceUuid, composePath.trim())
+            setComposeValidation(result)
+            if (result.valid) pagination.invalidate()
+        } catch (error) {
+            setComposeValidation({
+                valid: false,
+                exists: false,
+                composeFile: false,
+                message: error instanceof Error ? error.message : t('viewer.env.pathInvalid'),
+            })
+        } finally {
+            setComposeValidationLoading(false)
+        }
+    }, [composePath, pagination.invalidate, serviceUuid, t])
+
+    useEffect(() => {
+        if (
+            !envDrawerOpen ||
+            !container?.composePath ||
+            composePath !== container.composePath ||
+            composeValidation?.valid ||
+            composeValidationLoading
+        ) return
+        void validateComposePath()
+    }, [
+        composePath,
+        composeValidation?.valid,
+        composeValidationLoading,
+        container?.composePath,
+        envDrawerOpen,
+        validateComposePath,
+    ])
 
     return (
         <div className="flex flex-col h-[calc(100vh-3.5rem)]">
@@ -335,24 +397,27 @@ export function LogViewer() {
                     <Drawer direction="right" open={envDrawerOpen} onOpenChange={setEnvDrawerOpen}>
                         <DrawerTrigger asChild><Button variant="ghost" size="sm" title={t('viewer.env')}><Braces
                             className="h-4 w-4"/>{t('viewer.env')}</Button></DrawerTrigger>
-                        <DrawerContent>
-                            <DrawerHeader><DrawerTitle>{t('viewer.env')}</DrawerTitle><DrawerDescription>{container?.name || serviceUuid}</DrawerDescription></DrawerHeader>
-                            <div className="flex-1 overflow-auto px-4 pb-4">
-                                {container?.env && container.env.length > 0 ? (
-                                    <div className="space-y-1">{container.env.map((line, i) => {
-                                        const eqIndex = line.indexOf('=');
-                                        const key = eqIndex >= 0 ? line.slice(0, eqIndex) : line;
-                                        const value = eqIndex >= 0 ? line.slice(eqIndex + 1) : '';
-                                        return (<div key={i}
-                                                     className="group rounded-md border px-3 py-2 text-sm hover:bg-accent/50 transition-colors">
-                                            <div
-                                                className="font-mono text-xs font-medium text-foreground break-all">{key}</div>
-                                            {value && (<div
-                                                className="font-mono text-xs text-muted-foreground mt-0.5 break-all select-all">{value}</div>)}
-                                        </div>)
-                                    })}</div>) : (<div
-                                    className="flex items-center justify-center py-12 text-muted-foreground text-sm">{t('viewer.noEnv')}</div>)}
-                            </div>
+                        <DrawerContent className="w-[min(46rem,92vw)]">
+                            <DrawerHeader>
+                                <DrawerTitle>{t('viewer.env')}</DrawerTitle>
+                                <DrawerDescription>{container?.name || serviceUuid}</DrawerDescription>
+                            </DrawerHeader>
+                            <EnvEditor
+                                serviceUuid={serviceUuid}
+                                env={container?.env ?? []}
+                                composePath={composePath}
+                                onComposePathChange={value => {
+                                    setComposePath(value)
+                                    setComposeValidation(null)
+                                    setEnvMutationMessage('')
+                                }}
+                                composeValidation={composeValidation}
+                                composeValidationLoading={composeValidationLoading}
+                                onValidateComposePath={validateComposePath}
+                                mutationMessage={envMutationMessage}
+                                onMutationMessageChange={setEnvMutationMessage}
+                                onRefresh={pagination.invalidate}
+                            />
                         </DrawerContent>
                     </Drawer>
                     <Badge
@@ -506,4 +571,283 @@ function PullIndicator({api, hint, loadingLabel}: {
             </button>
         </div>
     )
+}
+
+function EnvEditor({
+                       serviceUuid,
+                       env,
+                       composePath,
+                       onComposePathChange,
+                       composeValidation,
+                       composeValidationLoading,
+                       onValidateComposePath,
+                       mutationMessage,
+                       onMutationMessageChange,
+                       onRefresh,
+                   }: {
+    serviceUuid?: string
+    env: string[]
+    composePath: string
+    onComposePathChange: (value: string) => void
+    composeValidation: ComposePathValidationResult | null
+    composeValidationLoading: boolean
+    onValidateComposePath: () => void
+    mutationMessage: string
+    onMutationMessageChange: (value: string) => void
+    onRefresh: () => void
+}) {
+    const {t} = useUiPreferences()
+    const [newKey, setNewKey] = useState('')
+    const [newValue, setNewValue] = useState('')
+    const [pendingAction, setPendingAction] = useState(false)
+    const canEdit = !!composeValidation?.valid
+
+    const runMutation = useCallback(async (action: () => Promise<unknown>) => {
+        if (!serviceUuid || !canEdit) {
+            onMutationMessageChange(t('viewer.env.pathPending'))
+            return
+        }
+        setPendingAction(true)
+        try {
+            await action()
+            onMutationMessageChange(t('viewer.env.apiPending'))
+            onRefresh()
+        } catch (error) {
+            const message = error instanceof Error ? error.message : t('viewer.env.apiPending')
+            onMutationMessageChange(message.includes('reserved') ? t('viewer.env.apiPending') : message)
+        } finally {
+            setPendingAction(false)
+        }
+    }, [canEdit, onMutationMessageChange, onRefresh, serviceUuid, t])
+
+    const addEnv = useCallback(() => {
+        const key = newKey.trim()
+        if (!key) return
+        void runMutation(() => api.containers.createEnv(serviceUuid!, composePath.trim(), key, newValue))
+    }, [composePath, newKey, newValue, runMutation, serviceUuid])
+
+    const validationText = composeValidation?.valid
+        ? t('viewer.env.pathValid')
+        : composeValidation?.message || (composePath ? t('viewer.env.pathPending') : t('viewer.env.pathRequired'))
+
+    return (
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4">
+            <div className="rounded-md border bg-card/60 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium">{t('viewer.env.composePath')}</div>
+                    <Badge variant={composeValidation?.valid ? 'success' : 'warning'}>
+                        {composeValidation?.valid ? t('viewer.env.pathValid') : t('viewer.env.pathInvalid')}
+                    </Badge>
+                </div>
+                <div className="flex gap-2">
+                    <Input
+                        value={composePath}
+                        onChange={event => onComposePathChange(event.target.value)}
+                        placeholder={t('viewer.env.composePathPlaceholder')}
+                        className="font-mono"
+                    />
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={onValidateComposePath}
+                        disabled={composeValidationLoading}
+                    >
+                        {composeValidationLoading ? <Loader2 className="h-4 w-4 animate-spin"/> :
+                            <Check className="h-4 w-4"/>}
+                        {t('viewer.env.validatePath')}
+                    </Button>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">{validationText}</div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto">
+                {env.length > 0 ? (
+                    <div className="flex flex-col gap-1">
+                        {env.map((line, index) => (
+                            <EnvRow
+                                key={`${line}-${index}`}
+                                serviceUuid={serviceUuid}
+                                line={line}
+                                composePath={composePath}
+                                canEdit={canEdit}
+                                pending={pendingAction}
+                                onMutation={runMutation}
+                                onMessage={onMutationMessageChange}
+                            />
+                        ))}
+                    </div>
+                ) : (
+                    <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                        {t('viewer.noEnv')}
+                    </div>
+                )}
+            </div>
+
+            <div className="rounded-md border bg-card/60 p-3">
+                <div className="mb-2 text-sm font-medium">{t('viewer.env.add')}</div>
+                <div className="grid grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,1fr)_auto] gap-2">
+                    <Input
+                        value={newKey}
+                        onChange={event => setNewKey(event.target.value)}
+                        placeholder={t('viewer.env.key')}
+                        className="font-mono"
+                        disabled={!canEdit || pendingAction}
+                    />
+                    <Input
+                        value={newValue}
+                        onChange={event => setNewValue(event.target.value)}
+                        placeholder={t('viewer.env.value')}
+                        className="font-mono"
+                        disabled={!canEdit || pendingAction}
+                    />
+                    <Button type="button" size="sm" onClick={addEnv}
+                            disabled={!canEdit || pendingAction || !newKey.trim()}>
+                        <Plus className="h-4 w-4"/>
+                        {t('viewer.env.add')}
+                    </Button>
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                    {mutationMessage || (canEdit ? t('viewer.env.doubleClickCopy') : t('viewer.env.pathPending'))}
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function EnvRow({
+                    serviceUuid,
+                    line,
+                    composePath,
+                    canEdit,
+                    pending,
+                    onMutation,
+                    onMessage,
+                }: {
+    serviceUuid?: string
+    line: string
+    composePath: string
+    canEdit: boolean
+    pending: boolean
+    onMutation: (action: () => Promise<unknown>) => Promise<void>
+    onMessage: (value: string) => void
+}) {
+    const {t} = useUiPreferences()
+    const clickTimerRef = useRef<number | null>(null)
+    const {key, value} = useMemo(() => parseEnvLine(line), [line])
+    const [editing, setEditing] = useState(false)
+    const [draftKey, setDraftKey] = useState(key)
+    const [draftValue, setDraftValue] = useState(value)
+
+    useEffect(() => {
+        setDraftKey(key)
+        setDraftValue(value)
+    }, [key, value])
+
+    useEffect(() => () => {
+        if (clickTimerRef.current != null) window.clearTimeout(clickTimerRef.current)
+    }, [])
+
+    const copyLine = useCallback(async () => {
+        if (clickTimerRef.current != null) {
+            window.clearTimeout(clickTimerRef.current)
+            clickTimerRef.current = null
+        }
+        const copied = await copyToClipboard(line)
+        onMessage(copied ? t('viewer.env.copied') : t('viewer.env.copyFailed'))
+    }, [line, onMessage, t])
+
+    const enterEdit = useCallback(() => {
+        if (!canEdit) {
+            onMessage(t('viewer.env.pathPending'))
+            return
+        }
+        if (clickTimerRef.current != null) {
+            window.clearTimeout(clickTimerRef.current)
+        }
+        clickTimerRef.current = window.setTimeout(() => {
+            setEditing(true)
+            clickTimerRef.current = null
+        }, 180)
+    }, [canEdit, onMessage, t])
+
+    const cancelEdit = useCallback(() => {
+        setDraftKey(key)
+        setDraftValue(value)
+        setEditing(false)
+    }, [key, value])
+
+    const saveEdit = useCallback(() => {
+        const nextKey = draftKey.trim()
+        if (!serviceUuid || !nextKey) return
+        void onMutation(() => api.containers.updateEnv(serviceUuid, composePath.trim(), key, nextKey, draftValue))
+        setEditing(false)
+    }, [composePath, draftKey, draftValue, key, onMutation, serviceUuid])
+
+    const deleteEnv = useCallback(() => {
+        if (!serviceUuid) return
+        void onMutation(() => api.containers.deleteEnv(serviceUuid, composePath.trim(), key))
+        setEditing(false)
+    }, [composePath, key, onMutation, serviceUuid])
+
+    if (editing) {
+        return (
+            <div className="env-entry-row rounded-md border bg-background p-2">
+                <div className="grid grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,1fr)] gap-2">
+                    <Input
+                        value={draftKey}
+                        onChange={event => setDraftKey(event.target.value)}
+                        className="env-entry-input"
+                        disabled={pending}
+                        aria-label={t('viewer.env.key')}
+                    />
+                    <Input
+                        value={draftValue}
+                        onChange={event => setDraftValue(event.target.value)}
+                        className="env-entry-input"
+                        disabled={pending}
+                        aria-label={t('viewer.env.value')}
+                    />
+                </div>
+                <div className="mt-2 flex justify-end gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={cancelEdit} disabled={pending}>
+                        <X className="h-4 w-4"/>
+                        {t('viewer.env.cancel')}
+                    </Button>
+                    <Button type="button" variant="destructive" size="sm" onClick={deleteEnv} disabled={pending}>
+                        <Trash2 className="h-4 w-4"/>
+                        {t('viewer.env.delete')}
+                    </Button>
+                    <Button type="button" size="sm" onClick={saveEdit} disabled={pending || !draftKey.trim()}>
+                        <Save className="h-4 w-4"/>
+                        {t('viewer.env.save')}
+                    </Button>
+                </div>
+            </div>
+        )
+    }
+
+    return (
+        <button
+            type="button"
+            className="env-entry-row group rounded-md border bg-background/70 px-3 py-2 text-left transition-colors hover:bg-accent/50 disabled:cursor-not-allowed disabled:opacity-75"
+            onClick={enterEdit}
+            onDoubleClick={copyLine}
+        >
+            <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                    <div className="env-entry-key break-all">{key}</div>
+                    {value && <div className="env-entry-value mt-0.5 break-all">{value}</div>}
+                </div>
+                <Copy
+                    className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"/>
+            </div>
+        </button>
+    )
+}
+
+function parseEnvLine(line: string): { key: string; value: string } {
+    const eqIndex = line.indexOf('=')
+    if (eqIndex < 0) return {key: line, value: ''}
+    return {key: line.slice(0, eqIndex), value: line.slice(eqIndex + 1)}
 }

@@ -1,4 +1,6 @@
 import {Elysia, t} from 'elysia'
+import {basename} from 'path'
+import {readFile, stat} from 'fs/promises'
 import {authGuard} from '../plugins/auth-guard'
 import {getContainer, getContainerStats, listContainers} from '../docker'
 import type {LogCollector} from '../log-collector'
@@ -46,7 +48,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .get('/:uuid', async ({params}) => {
           const containerId = await resolveContainerId(params.uuid, storage, resolver)
           if (!containerId) return {id: params.uuid, name: '', state: 'removed', watched: false}
-          
+
           const info = await getContainer(containerId)
         const state = info.State
         const uptime = state?.StartedAt ? formatUptime(state.StartedAt) : null
@@ -58,10 +60,11 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
             } catch {
             }
         }
-          
+
           const labels: Record<string, string> = info.Config?.Labels || {}
           const serviceUuid = await resolver.resolve(labels, info.Name?.replace(/^\//, '') || '')
           const watched = await storage.isContainerWatched(serviceUuid)
+          const service = await storage.getServiceByUuid(serviceUuid)
 
         return {
             id: serviceUuid,
@@ -73,6 +76,7 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           created: info.Created,
           ports: info.NetworkSettings?.Ports,
           env: info.Config?.Env,
+            composePath: service?.composePath ?? null,
             watched,
           health: state?.Health?.Status ?? null,
           exitCode: state?.ExitCode ?? null,
@@ -87,6 +91,43 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
         }
       }, {
           params: t.Object({uuid: t.String()}),
+      })
+      .post('/:uuid/env/compose-path/validate', async ({params, body, status}) => {
+          const serviceUuid = await resolveExistingServiceUuid(params.uuid, storage, resolver)
+          if (!serviceUuid) return status(404, {error: 'Container not found'})
+
+          const result = await validateComposePath(body.composePath)
+          if (result.valid) {
+              await storage.setServiceComposePath(serviceUuid, body.composePath.trim())
+          }
+          return result
+      }, {
+          params: t.Object({uuid: t.String()}),
+          body: t.Object({composePath: t.String()}),
+      })
+      .post('/:uuid/env', async ({params, body, status}) => {
+          const guard = await validateEnvMutation(params.uuid, body.composePath, storage, resolver)
+          if (!guard.ok) return status(guard.status, {error: guard.error})
+          return status(501, {error: 'Environment variable mutation API is reserved'})
+      }, {
+          params: t.Object({uuid: t.String()}),
+          body: t.Object({composePath: t.String(), key: t.String(), value: t.String()}),
+      })
+      .patch('/:uuid/env/:key', async ({params, body, status}) => {
+          const guard = await validateEnvMutation(params.uuid, body.composePath, storage, resolver)
+          if (!guard.ok) return status(guard.status, {error: guard.error})
+          return status(501, {error: 'Environment variable mutation API is reserved'})
+      }, {
+          params: t.Object({uuid: t.String(), key: t.String()}),
+          body: t.Object({composePath: t.String(), key: t.String(), value: t.String()}),
+      })
+      .delete('/:uuid/env/:key', async ({params, query, status}) => {
+          const guard = await validateEnvMutation(params.uuid, query.composePath, storage, resolver)
+          if (!guard.ok) return status(guard.status, {error: guard.error})
+          return status(501, {error: 'Environment variable mutation API is reserved'})
+      }, {
+          params: t.Object({uuid: t.String(), key: t.String()}),
+          query: t.Object({composePath: t.String()}),
       })
       .get('/:uuid/stats', async ({params, status}) => {
           const containerId = await resolveContainerId(params.uuid, storage, resolver)
@@ -192,16 +233,90 @@ async function resolveServiceUuid(
     }
 }
 
+async function resolveExistingServiceUuid(
+    uuid: string,
+    storage: StorageAdapter,
+    resolver: ServiceResolver,
+): Promise<string | null> {
+    const service = await storage.getServiceByUuid(uuid)
+    if (service) return service.uuid
+
+    const containerId = await resolveContainerId(uuid, storage, resolver)
+    return resolveServiceUuid(uuid, containerId, storage, resolver)
+}
+
+async function validateEnvMutation(
+    uuid: string,
+    composePath: string,
+    storage: StorageAdapter,
+    resolver: ServiceResolver,
+): Promise<{ ok: true } | { ok: false; status: 400 | 404; error: string }> {
+    const serviceUuid = await resolveExistingServiceUuid(uuid, storage, resolver)
+    if (!serviceUuid) return {ok: false, status: 404, error: 'Container not found'}
+
+    const service = await storage.getServiceByUuid(serviceUuid)
+    const storedComposePath = service?.composePath?.trim()
+    if (!storedComposePath) return {ok: false, status: 400, error: 'Compose path is not validated'}
+    if (storedComposePath !== composePath.trim()) {
+        return {ok: false, status: 400, error: 'Compose path does not match the validated path'}
+    }
+
+    const validation = await validateComposePath(storedComposePath)
+    if (!validation.valid) {
+        return {ok: false, status: 400, error: validation.message || 'Compose path is invalid'}
+    }
+
+    return {ok: true}
+}
+
+async function validateComposePath(composePath: string): Promise<{
+    valid: boolean
+    exists: boolean
+    composeFile: boolean
+    message?: string
+}> {
+    const trimmed = composePath.trim()
+    if (!trimmed) {
+        return {valid: false, exists: false, composeFile: false, message: 'Compose path is required'}
+    }
+
+    const composeFile = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'].includes(basename(trimmed))
+    if (!composeFile) {
+        return {
+            valid: false,
+            exists: false,
+            composeFile: false,
+            message: 'Path must point to a docker compose YAML file'
+        }
+    }
+
+    try {
+        const fileStat = await stat(trimmed)
+        if (!fileStat.isFile()) {
+            return {valid: false, exists: true, composeFile, message: 'Compose path is not a file'}
+        }
+
+        const content = await readFile(trimmed, 'utf8')
+        if (!/^\s*services\s*:/m.test(content)) {
+            return {valid: false, exists: true, composeFile, message: 'Compose file must contain a services section'}
+        }
+
+        return {valid: true, exists: true, composeFile, message: 'Compose path validated'}
+    } catch {
+        return {valid: false, exists: false, composeFile, message: 'Compose path does not exist or cannot be read'}
+    }
+}
+
 function extractStats(stats: any, info: any) {
   if (!stats && !info?.State?.StartedAt) return null
-    
+
     let cpuPercent: number | null = null
   let memUsage: string | null = null
   let memPercent: number | null = null
   let diskRead: string | null = null
   let diskWrite: string | null = null
   let uptime: string | null = null
-    
+
     if (stats) {
     try {
       const cpuDelta = (stats.cpu_stats?.cpu_usage?.total_usage ?? 0) - (stats.precpu_stats?.cpu_usage?.total_usage ?? 0)
@@ -210,14 +325,14 @@ function extractStats(stats: any, info: any) {
       if (systemDelta > 0 && cpuDelta > 0) {
         cpuPercent = Math.round((cpuDelta / systemDelta) * numCpus * 10000) / 100
       }
-        
+
         const memUsed = stats.memory_stats?.usage ?? 0
       const memLimit = stats.memory_stats?.limit ?? 0
       if (memUsed > 0) {
         memUsage = formatBytes(memUsed)
         memPercent = memLimit > 0 ? Math.round((memUsed / memLimit) * 10000) / 100 : null
       }
-        
+
         const ioStats = stats.blkio_stats?.io_service_bytes_recursive
       if (ioStats && ioStats.length > 0) {
         let totalRead = 0, totalWrite = 0
@@ -231,11 +346,11 @@ function extractStats(stats: any, info: any) {
     } catch {
     }
   }
-    
+
     if (info?.State?.StartedAt) {
     uptime = formatUptime(info.State.StartedAt)
   }
-    
+
     return (cpuPercent !== null || memUsage !== null || uptime !== null)
       ? {cpuPercent, memUsage, memPercent, diskRead, diskWrite, uptime}
       : null

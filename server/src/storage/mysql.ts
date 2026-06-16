@@ -27,15 +27,15 @@ export class MysqlStorage implements StorageAdapter {
         })
         await this.createTables()
     }
-    
+
     // --- Services ---
-    
+
     async getOrCreateService(serviceKey: string, project: string | null, service: string | null, displayName: string): Promise<string> {
         const [existing] = await this.pool.execute(`SELECT uuid
                                                     FROM services
                                                     WHERE service_key = ?`, [serviceKey]) as any
         if (existing[0]) return existing[0].uuid
-        
+
         const uuid = crypto.randomUUID()
         try {
             await this.pool.execute(
@@ -54,7 +54,7 @@ export class MysqlStorage implements StorageAdapter {
         }
         return uuid
     }
-    
+
     async getServiceByUuid(uuid: string): Promise<Service | null> {
         const [rows] = await this.pool.execute(`SELECT *
                                                 FROM services
@@ -63,7 +63,7 @@ export class MysqlStorage implements StorageAdapter {
         if (!row) return null
         return this.rowToService(row)
     }
-    
+
     async getActiveContainerId(serviceUuid: string): Promise<string | null> {
         const [rows] = await this.pool.execute(
             `SELECT container_id
@@ -76,7 +76,16 @@ export class MysqlStorage implements StorageAdapter {
         ) as any
         return rows[0]?.container_id ?? null
     }
-    
+
+    async setServiceComposePath(serviceUuid: string, composePath: string | null): Promise<void> {
+        await this.pool.execute(
+            `UPDATE services
+             SET compose_path = ?
+             WHERE uuid = ?`,
+            [composePath, serviceUuid],
+        )
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
@@ -219,10 +228,10 @@ export class MysqlStorage implements StorageAdapter {
             `SELECT * FROM (SELECT * FROM log_entries WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?) AS sub ORDER BY id ASC`,
             [...values, String(limit), String(offset)],
         ) as any
-        
+
         return {entries: (rows as any[]).map(r => this.rowToEntry(r)), total, hasMore: offset + limit < total}
     }
-    
+
     async groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult> {
         if (!isSafeFieldName(field)) throw new Error(`Invalid field name: ${field}`)
 
@@ -243,7 +252,7 @@ export class MysqlStorage implements StorageAdapter {
             ) as any
             return {field, groups: rows}
         }
-        
+
         const conditions = ['service_uuid = ?', 'is_json = 1', `JSON_EXTRACT(parsed_json, '$.${field}') IS NOT NULL`]
         const values: any[] = [serviceUuid]
         if (instanceId) {
@@ -260,7 +269,7 @@ export class MysqlStorage implements StorageAdapter {
         ) as any
         return {field, groups: rows}
     }
-    
+
     async getDistinctLevels(serviceUuid: string): Promise<string[]> {
         const [rows] = await this.pool.execute(`SELECT DISTINCT level
                                                 FROM log_entries
@@ -268,7 +277,7 @@ export class MysqlStorage implements StorageAdapter {
                                                   AND level IS NOT NULL`, [serviceUuid]) as any
         return (rows as any[]).map(r => r.level)
     }
-    
+
     async getDistinctFieldValues(serviceUuid: string, field: string): Promise<string[]> {
         if (!isSafeFieldName(field)) throw new Error(`Invalid field name: ${field}`)
         const [rows] = await this.pool.execute(
@@ -282,24 +291,24 @@ export class MysqlStorage implements StorageAdapter {
         ) as any
         return (rows as any[]).map(r => r.val)
     }
-    
+
     async deleteLogsByInstance(instanceId: string): Promise<void> {
         await this.pool.execute('DELETE FROM log_entries WHERE instance_id = ?', [instanceId])
         await this.pool.execute('DELETE FROM container_instances WHERE id = ?', [instanceId])
     }
-    
+
     async deleteLogsByService(serviceUuid: string): Promise<void> {
         await this.pool.execute('DELETE FROM log_entries WHERE service_uuid = ?', [serviceUuid])
         await this.pool.execute('DELETE FROM container_instances WHERE service_uuid = ?', [serviceUuid])
     }
-    
+
     async deleteLogsBefore(cutoff: string): Promise<number> {
         const [result] = await this.pool.execute('DELETE FROM log_entries WHERE created_at < ?', [cutoff]) as any
         return result.affectedRows
     }
-    
+
     // --- Instances ---
-    
+
     async createInstance(containerId: string, containerName: string, serviceUuid: string): Promise<string> {
         const id = `inst_${containerId}_${Date.now()}`
         await this.pool.execute(
@@ -313,7 +322,7 @@ export class MysqlStorage implements StorageAdapter {
     async stopInstance(instanceId: string): Promise<void> {
         await this.pool.execute(`UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`, [nowISO(), instanceId])
     }
-    
+
     async getInstances(serviceUuid: string): Promise<ContainerInstance[]> {
         const [rows] = await this.pool.execute(
             `SELECT *
@@ -323,7 +332,7 @@ export class MysqlStorage implements StorageAdapter {
         ) as any
         return (rows as any[]).map(r => this.rowToInstance(r))
     }
-    
+
     async getActiveInstance(serviceUuid: string): Promise<ContainerInstance | null> {
         const [rows] = await this.pool.execute(
             `SELECT *
@@ -337,7 +346,7 @@ export class MysqlStorage implements StorageAdapter {
         if (!row) return null
         return this.rowToInstance(row)
     }
-    
+
     async isContainerWatched(serviceUuid: string): Promise<boolean> {
         const [rows] = await this.pool.execute(
             `SELECT watched
@@ -349,7 +358,7 @@ export class MysqlStorage implements StorageAdapter {
         const row = rows[0]
         return row ? row.watched === 1 : false
     }
-    
+
     async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {
         await this.pool.execute(
             `UPDATE container_instances
@@ -358,7 +367,7 @@ export class MysqlStorage implements StorageAdapter {
             [watched ? 1 : 0, serviceUuid],
         )
     }
-    
+
     async deleteStoppedInstancesWithNoLogs(): Promise<number> {
         const [result] = await this.pool.execute(`
             DELETE ci
@@ -369,17 +378,17 @@ export class MysqlStorage implements StorageAdapter {
         `) as any
         return result.affectedRows
     }
-    
+
     async close(): Promise<void> {
         await this.pool.end()
     }
-    
+
     async checkpoint(): Promise<void> {
     }
-    
+
     async vacuum(): Promise<void> {
     }
-    
+
     // --- Private ---
 
     private async createTables() {
@@ -393,9 +402,11 @@ export class MysqlStorage implements StorageAdapter {
                     project      VARCHAR(255),
                     service      VARCHAR(255),
                     display_name VARCHAR(255) NOT NULL,
+                    compose_path VARCHAR(1024) NULL,
                     created_at   DATETIME     NOT NULL
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             `)
+            await this.ensureColumn(conn, 'services', 'compose_path', 'VARCHAR(1024) NULL')
 
             await conn.execute(`
                 CREATE TABLE IF NOT EXISTS container_instances
@@ -441,14 +452,29 @@ export class MysqlStorage implements StorageAdapter {
             conn.release()
         }
     }
-    
+
     private rowToService(row: any): Service {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
-            service: row.service, displayName: row.display_name, createdAt: row.created_at,
+            service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            createdAt: row.created_at,
         }
     }
-    
+
+    private async ensureColumn(conn: mysql.PoolConnection, table: string, column: string, definition: string): Promise<void> {
+        const [rows] = await conn.execute(
+            `SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()
+               AND TABLE_NAME = ?
+               AND COLUMN_NAME = ?`,
+            [table, column],
+        ) as any
+        if (rows.length > 0) return
+        await conn.execute(`ALTER TABLE ${table}
+            ADD COLUMN ${column} ${definition}`)
+    }
+
     private rowToInstance(row: any): ContainerInstance {
         return {
             id: row.id, serviceUuid: row.service_uuid, containerId: row.container_id,

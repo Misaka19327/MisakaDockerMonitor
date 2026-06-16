@@ -1,4 +1,13 @@
-import type {AppConfig, AuthResponse, Container, ContainerInstance, GroupResult, LogQueryResult} from '../types'
+import type {
+    AppConfig,
+    AuthResponse,
+    ComposePathValidationResult,
+    Container,
+    ContainerEnvMutationResult,
+    ContainerInstance,
+    GroupResult,
+    LogQueryResult,
+} from '../types'
 
 const BASE = ''
 
@@ -72,6 +81,31 @@ export const api = {
         },
         instances(uuid: string): Promise<ContainerInstance[]> {
             return request(`/api/containers/${uuid}/instances`)
+        },
+        validateComposePath(uuid: string, composePath: string): Promise<ComposePathValidationResult> {
+            return request(`/api/containers/${uuid}/env/compose-path/validate`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({composePath}),
+            })
+        },
+        createEnv(uuid: string, composePath: string, key: string, value: string): Promise<ContainerEnvMutationResult> {
+            return request(`/api/containers/${uuid}/env`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({composePath, key, value}),
+            })
+        },
+        updateEnv(uuid: string, composePath: string, originalKey: string, key: string, value: string): Promise<ContainerEnvMutationResult> {
+            return request(`/api/containers/${uuid}/env/${encodeURIComponent(originalKey)}`, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({composePath, key, value}),
+            })
+        },
+        deleteEnv(uuid: string, composePath: string, key: string): Promise<ContainerEnvMutationResult> {
+            const qs = new URLSearchParams({composePath})
+            return request(`/api/containers/${uuid}/env/${encodeURIComponent(key)}?${qs}`, {method: 'DELETE'})
         },
     },
 

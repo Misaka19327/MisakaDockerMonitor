@@ -24,9 +24,9 @@ export class ClickHouseStorage implements StorageAdapter {
         })
         await this.createTables()
     }
-    
+
     // --- Services ---
-    
+
     async getOrCreateService(serviceKey: string, project: string | null, service: string | null, displayName: string): Promise<string> {
         const escapedKey = escapeClickHouseString(serviceKey)
         const result = await this.client.query({
@@ -37,7 +37,7 @@ export class ClickHouseStorage implements StorageAdapter {
         })
         const rows = await result.json()
         if (rows.length > 0) return (rows[0] as any).uuid
-        
+
         const uuid = crypto.randomUUID()
         await this.client.insert({
             table: 'services',
@@ -47,13 +47,14 @@ export class ClickHouseStorage implements StorageAdapter {
                 project,
                 service,
                 display_name: displayName,
+                compose_path: null,
                 created_at: nowISO().substring(0, 19)
             }],
             format: 'JSONEachRow',
         })
         return uuid
     }
-    
+
     async getServiceByUuid(uuid: string): Promise<Service | null> {
         const result = await this.client.query({
             query: `SELECT *
@@ -65,7 +66,7 @@ export class ClickHouseStorage implements StorageAdapter {
         if (rows.length === 0) return null
         return this.rowToService(rows[0])
     }
-    
+
     async getActiveContainerId(serviceUuid: string): Promise<string | null> {
         const result = await this.client.query({
             query: `SELECT container_id
@@ -78,7 +79,15 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return rows[0]?.container_id ?? null
     }
-    
+
+    async setServiceComposePath(serviceUuid: string, composePath: string | null): Promise<void> {
+        await this.client.exec({
+            query: `ALTER TABLE services UPDATE compose_path = ${
+                    composePath ? `'${escapeClickHouseString(composePath)}'` : 'NULL'
+            } WHERE uuid = '${escapeClickHouseString(serviceUuid)}'`,
+        })
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
@@ -177,7 +186,7 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return {entries: rows.map((r: any) => this.rowToEntry(r)), total, hasMore: offset + limit < total}
     }
-    
+
     async groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult> {
         const safeField = assertSafeFieldName(field)
         const conditions = [`service_uuid = '${escapeClickHouseString(serviceUuid)}'`]
@@ -195,7 +204,7 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return {field: safeField, groups: rows}
     }
-    
+
     async getDistinctLevels(serviceUuid: string): Promise<string[]> {
         const result = await this.client.query({
             query: `SELECT DISTINCT level
@@ -208,7 +217,7 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return rows.map((r: any) => r.level)
     }
-    
+
     async getDistinctFieldValues(serviceUuid: string, field: string): Promise<string[]> {
         const safeField = assertSafeFieldName(field)
         const result = await this.client.query({
@@ -218,26 +227,26 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return rows.map((r: any) => r.val)
     }
-    
+
     async deleteLogsByInstance(instanceId: string): Promise<void> {
         const escapedId = escapeClickHouseString(instanceId)
         await this.client.exec({query: `ALTER TABLE log_entries DELETE WHERE instance_id = '${escapedId}'`})
         await this.client.exec({query: `ALTER TABLE container_instances DELETE WHERE id = '${escapedId}'`})
     }
-    
+
     async deleteLogsByService(serviceUuid: string): Promise<void> {
         const escapedUuid = escapeClickHouseString(serviceUuid)
         await this.client.exec({query: `ALTER TABLE log_entries DELETE WHERE service_uuid = '${escapedUuid}'`})
         await this.client.exec({query: `ALTER TABLE container_instances DELETE WHERE service_uuid = '${escapedUuid}'`})
     }
-    
+
     async deleteLogsBefore(cutoff: string): Promise<number> {
         await this.client.exec({query: `ALTER TABLE log_entries DELETE WHERE created_at < '${escapeClickHouseString(cutoff)}'`})
         return 0
     }
-    
+
     // --- Instances ---
-    
+
     async createInstance(containerId: string, containerName: string, serviceUuid: string): Promise<string> {
         const id = `inst_${containerId}_${Date.now()}`
         await this.client.insert({
@@ -262,7 +271,7 @@ export class ClickHouseStorage implements StorageAdapter {
             query: `ALTER TABLE container_instances UPDATE stopped_at = '${stoppedAt}', status = 'stopped' WHERE id = '${escapeClickHouseString(instanceId)}'`,
         })
     }
-    
+
     async getInstances(serviceUuid: string): Promise<ContainerInstance[]> {
         const result = await this.client.query({
             query: `SELECT * FROM container_instances WHERE service_uuid = '${escapeClickHouseString(serviceUuid)}' ORDER BY started_at DESC`,
@@ -271,7 +280,7 @@ export class ClickHouseStorage implements StorageAdapter {
         const rows = await result.json()
         return rows.map((r: any) => this.rowToInstance(r))
     }
-    
+
     async getActiveInstance(serviceUuid: string): Promise<ContainerInstance | null> {
         const result = await this.client.query({
             query: `SELECT *
@@ -285,7 +294,7 @@ export class ClickHouseStorage implements StorageAdapter {
         if (!rows[0]) return null
         return this.rowToInstance(rows[0])
     }
-    
+
     async isContainerWatched(serviceUuid: string): Promise<boolean> {
         const result = await this.client.query({
             query: `SELECT watched FROM container_instances WHERE service_uuid = '${escapeClickHouseString(serviceUuid)}' ORDER BY started_at DESC LIMIT 1`,
@@ -295,7 +304,7 @@ export class ClickHouseStorage implements StorageAdapter {
         if (!rows[0]) return false
         return (rows[0] as any).watched === 1
     }
-    
+
     async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {
         await this.client.exec({
             query: `ALTER TABLE container_instances UPDATE watched = ${watched ? 1 : 0} WHERE service_uuid = '${escapeClickHouseString(serviceUuid)}'`,
@@ -313,17 +322,17 @@ export class ClickHouseStorage implements StorageAdapter {
         }
         return rows.length
     }
-    
+
     async close(): Promise<void> {
         await this.client.close()
     }
-    
+
     async checkpoint(): Promise<void> {
     }
-    
+
     async vacuum(): Promise<void> {
     }
-    
+
     // --- Private ---
 
     private async createTables() {
@@ -336,10 +345,12 @@ export class ClickHouseStorage implements StorageAdapter {
                 project Nullable(String),
                 service Nullable(String),
                 display_name String,
+                compose_path Nullable(String),
                 created_at DateTime
             ) ENGINE = MergeTree() ORDER BY (service_key)`,
         })
-        
+        await this.client.exec({query: `ALTER TABLE services ADD COLUMN IF NOT EXISTS compose_path Nullable(String)`})
+
         await this.client.exec({
             query: `CREATE TABLE IF NOT EXISTS container_instances (
                 id String,
@@ -352,7 +363,7 @@ export class ClickHouseStorage implements StorageAdapter {
                 watched UInt8 DEFAULT 1
             ) ENGINE = MergeTree() ORDER BY (service_uuid, started_at)`,
         })
-        
+
         await this.client.exec({
             query: `CREATE TABLE IF NOT EXISTS log_entries (
                 id UInt64,
@@ -373,14 +384,15 @@ export class ClickHouseStorage implements StorageAdapter {
             ) ENGINE = MergeTree() ORDER BY (service_uuid, instance_id, id)`,
         })
     }
-    
+
     private rowToService(row: any): Service {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
-            service: row.service, displayName: row.display_name, createdAt: row.created_at,
+            service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            createdAt: row.created_at,
         }
     }
-    
+
     private rowToInstance(row: any): ContainerInstance {
         return {
             id: row.id, serviceUuid: row.service_uuid, containerId: row.container_id,

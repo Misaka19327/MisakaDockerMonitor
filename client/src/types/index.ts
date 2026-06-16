@@ -21,13 +21,14 @@ export interface Container {
   health?: string | null
   exitCode?: number | null
   pid?: number | null
-  restartCount?: number | null
-  startedAt?: string | null
-  finishedAt?: string | null
-  uptime?: string | null
-  networks?: string[]
-  restartPolicy?: string | null
+    restartCount?: number | null
+    startedAt?: string | null
+    finishedAt?: string | null
+    uptime?: string | null
+    networks?: string[]
+    restartPolicy?: string | null
     env?: string[] | null
+    composePath?: string | null
 }
 
 export interface LogEntry {
@@ -77,4 +78,16 @@ export interface AppConfig {
 export interface AuthResponse {
   token: string
   username: string
+}
+
+export interface ComposePathValidationResult {
+    valid: boolean
+    exists?: boolean
+    composeFile?: boolean
+    message?: string
+}
+
+export interface ContainerEnvMutationResult {
+    success: boolean
+    env?: string[]
 }

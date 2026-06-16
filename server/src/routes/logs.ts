@@ -30,18 +30,24 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                 offset: parseInteger(offset, 0),
             })
 
+            const service = await storage.getServiceByUuid(params.serviceUuid)
             let container = null
             const containerId = await storage.getActiveContainerId(params.serviceUuid)
             if (containerId) {
                 try {
-                    container = await getContainerDetail(containerId, collector)
+                    container = await getContainerDetail(containerId, params.serviceUuid, service?.composePath ?? null, collector)
                 } catch {
                 }
             }
             if (!container) {
-                const service = await storage.getServiceByUuid(params.serviceUuid)
                 if (service) {
-                    container = {id: params.serviceUuid, name: service.displayName, state: 'removed', watched: false}
+                    container = {
+                        id: params.serviceUuid,
+                        name: service.displayName,
+                        state: 'removed',
+                        watched: false,
+                        composePath: service.composePath,
+                    }
                 }
             }
 
@@ -98,7 +104,7 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
             set.headers['content-type'] = 'text/event-stream'
             set.headers['cache-control'] = 'no-cache'
             set.headers['connection'] = 'keep-alive'
-            
+
             const serviceUuid = params.serviceUuid
             let heartbeat: ReturnType<typeof setInterval> | null = null
             let statusInterval: ReturnType<typeof setInterval> | null = null
@@ -115,7 +121,7 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                     const sendStatusEvent = (data: unknown) => {
                         controller.enqueue(encoder.encode(`event: status\ndata: ${JSON.stringify(data)}\n\n`))
                     }
-                    
+
                     // Subscribe to real-time log push from LogCollector
                     unsubscribe = collector.onEntries((entries) => {
                         const matched = entries.filter(entry => entry.serviceUuid === serviceUuid)
@@ -161,13 +167,18 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
         })
 }
 
-async function getContainerDetail(containerId: string, collector: { isWatching: (id: string) => boolean }) {
+async function getContainerDetail(
+    containerId: string,
+    serviceUuid: string,
+    composePath: string | null,
+    collector: { isWatching: (id: string) => boolean },
+) {
     const info = await getContainer(containerId)
     const state = info.State
     const uptime = state?.StartedAt ? formatUptime(state.StartedAt) : null
-    
+
     return {
-        id: info.Id,
+        id: serviceUuid,
         dockerId: info.Id,
         name: info.Name?.replace(/^\//, ''),
         image: info.Config?.Image,
@@ -176,6 +187,7 @@ async function getContainerDetail(containerId: string, collector: { isWatching: 
         created: info.Created,
         ports: info.NetworkSettings?.Ports,
         env: info.Config?.Env,
+        composePath,
         watched: collector.isWatching(containerId),
         health: state?.Health?.Status ?? null,
         exitCode: state?.ExitCode ?? null,

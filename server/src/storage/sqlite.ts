@@ -5,9 +5,9 @@ import type {
     ContainerInstance,
     GroupResult,
     LogEntry,
-    ParsedLogPatch,
     LogQueryParams,
     LogQueryResult,
+    ParsedLogPatch,
     Service,
     StorageAdapter
 } from './index'
@@ -25,15 +25,15 @@ export class SqliteStorage implements StorageAdapter {
         this.db.run('PRAGMA wal_autocheckpoint = 1000')
         this.createTables()
     }
-    
+
     // --- Services ---
-    
+
     async getOrCreateService(serviceKey: string, project: string | null, service: string | null, displayName: string): Promise<string> {
         const existing = this.db.query(`SELECT uuid FROM services WHERE service_key = ?`).get(serviceKey) as {
             uuid: string
         } | null
         if (existing) return existing.uuid
-        
+
         const uuid = crypto.randomUUID()
         this.db.run(
             `INSERT INTO services (uuid, service_key, project, service, display_name, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -41,20 +41,29 @@ export class SqliteStorage implements StorageAdapter {
         )
         return uuid
     }
-    
+
     async getServiceByUuid(uuid: string): Promise<Service | null> {
         const row = this.db.query(`SELECT * FROM services WHERE uuid = ?`).get(uuid) as any
         if (!row) return null
         return this.rowToService(row)
     }
-    
+
     async getActiveContainerId(serviceUuid: string): Promise<string | null> {
         const row = this.db.query(
             `SELECT container_id FROM container_instances WHERE service_uuid = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1`,
         ).get(serviceUuid) as { container_id: string } | null
         return row?.container_id ?? null
     }
-    
+
+    async setServiceComposePath(serviceUuid: string, composePath: string | null): Promise<void> {
+        this.db.run(
+            `UPDATE services
+             SET compose_path = ?
+             WHERE uuid = ?`,
+            [composePath, serviceUuid],
+        )
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
@@ -173,7 +182,7 @@ export class SqliteStorage implements StorageAdapter {
         }
 
         const where = conditions.join(' AND ')
-        
+
         const countRow = this.db.query(`SELECT COUNT(*) as total FROM log_entries WHERE ${where}`).get(...values) as {
             total: number
         } | null
@@ -184,10 +193,10 @@ export class SqliteStorage implements StorageAdapter {
                 SELECT * FROM log_entries WHERE ${where} ORDER BY id DESC LIMIT ? OFFSET ?
             ) ORDER BY id ASC
         `).all(...values, limit, offset) as any[]
-        
+
         return {entries: rows.map(r => this.rowToEntry(r)), total, hasMore: offset + limit < total}
     }
-    
+
     async groupByField(serviceUuid: string, field: string, instanceId?: string): Promise<GroupResult> {
         this.validateField(field)
         let queryStr: string
@@ -214,7 +223,7 @@ export class SqliteStorage implements StorageAdapter {
         const rows = this.db.query(queryStr).all(...values) as { value: string; count: number }[]
         return {field, groups: rows}
     }
-    
+
     async getDistinctLevels(serviceUuid: string): Promise<string[]> {
         const rows = this.db.query(
             `SELECT DISTINCT level
@@ -225,7 +234,7 @@ export class SqliteStorage implements StorageAdapter {
         ).all(serviceUuid) as { level: string }[]
         return rows.map(r => r.level)
     }
-    
+
     async getDistinctFieldValues(serviceUuid: string, field: string): Promise<string[]> {
         this.validateField(field)
         const rows = this.db.query(
@@ -243,19 +252,19 @@ export class SqliteStorage implements StorageAdapter {
         this.db.run('DELETE FROM log_entries WHERE instance_id = ?', [instanceId])
         this.db.run('DELETE FROM container_instances WHERE id = ?', [instanceId])
     }
-    
+
     async deleteLogsByService(serviceUuid: string): Promise<void> {
         this.db.run('DELETE FROM log_entries WHERE service_uuid = ?', [serviceUuid])
         this.db.run('DELETE FROM container_instances WHERE service_uuid = ?', [serviceUuid])
     }
-    
+
     async deleteLogsBefore(cutoff: string): Promise<number> {
         const result = this.db.run('DELETE FROM log_entries WHERE created_at < ?', [cutoff])
         return result.changes
     }
-    
+
     // --- Instances ---
-    
+
     async createInstance(containerId: string, containerName: string, serviceUuid: string): Promise<string> {
         const id = `inst_${containerId}_${Date.now()}`
         this.db.run(
@@ -264,21 +273,21 @@ export class SqliteStorage implements StorageAdapter {
         )
         return id
     }
-    
+
     async stopInstance(instanceId: string): Promise<void> {
         this.db.run(
             `UPDATE container_instances SET stopped_at = ?, status = 'stopped' WHERE id = ?`,
             [nowISO(), instanceId],
         )
     }
-    
+
     async getInstances(serviceUuid: string): Promise<ContainerInstance[]> {
         const rows = this.db.query(
             `SELECT * FROM container_instances WHERE service_uuid = ? ORDER BY started_at DESC`,
         ).all(serviceUuid) as any[]
         return rows.map(r => this.rowToInstance(r))
     }
-    
+
     async getActiveInstance(serviceUuid: string): Promise<ContainerInstance | null> {
         const row = this.db.query(
             `SELECT * FROM container_instances WHERE service_uuid = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1`,
@@ -286,14 +295,14 @@ export class SqliteStorage implements StorageAdapter {
         if (!row) return null
         return this.rowToInstance(row)
     }
-    
+
     async isContainerWatched(serviceUuid: string): Promise<boolean> {
         const row = this.db.query(
             `SELECT watched FROM container_instances WHERE service_uuid = ? ORDER BY started_at DESC LIMIT 1`,
         ).get(serviceUuid) as { watched: number } | null
         return row ? row.watched === 1 : false
     }
-    
+
     async setContainerWatched(serviceUuid: string, watched: boolean): Promise<void> {
         this.db.run(
             `UPDATE container_instances SET watched = ? WHERE service_uuid = ?`,
@@ -309,19 +318,19 @@ export class SqliteStorage implements StorageAdapter {
         `)
         return result.changes
     }
-    
+
     async checkpoint(): Promise<void> {
         this.db.run('PRAGMA wal_checkpoint(TRUNCATE)')
     }
-    
+
     async vacuum(): Promise<void> {
         this.db.run('VACUUM')
     }
-    
+
     async close(): Promise<void> {
         this.db.close()
     }
-    
+
     // --- Private ---
 
     private createTables() {
@@ -332,9 +341,11 @@ export class SqliteStorage implements StorageAdapter {
                 project TEXT,
                 service TEXT,
                 display_name TEXT NOT NULL,
+                compose_path TEXT,
                 created_at TEXT NOT NULL
             )
         `)
+        this.ensureColumn('services', 'compose_path', 'TEXT')
 
         this.db.run(`
             CREATE TABLE IF NOT EXISTS container_instances (
@@ -368,7 +379,7 @@ export class SqliteStorage implements StorageAdapter {
                 created_at TEXT NOT NULL
             )
         `)
-        
+
         this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_service ON log_entries(service_uuid)')
         this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_instance ON log_entries(instance_id)')
         this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_level ON log_entries(level)')
@@ -376,18 +387,26 @@ export class SqliteStorage implements StorageAdapter {
         this.db.run('CREATE INDEX IF NOT EXISTS idx_logs_created_at ON log_entries(created_at)')
         this.db.run('CREATE INDEX IF NOT EXISTS idx_instances_service ON container_instances(service_uuid)')
     }
-    
+
     private validateField(field: string): void {
         if (!isSafeFieldName(field)) throw new Error(`Invalid field name: ${field}`)
     }
-    
+
     private rowToService(row: any): Service {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
-            service: row.service, displayName: row.display_name, createdAt: row.created_at,
+            service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            createdAt: row.created_at,
         }
     }
-    
+
+    private ensureColumn(table: string, column: string, definition: string): void {
+        const columns = this.db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]
+        if (columns.some(c => c.name === column)) return
+        this.db.run(`ALTER TABLE ${table}
+            ADD COLUMN ${column} ${definition}`)
+    }
+
     private rowToInstance(row: any): ContainerInstance {
         return {
             id: row.id, serviceUuid: row.service_uuid, containerId: row.container_id,
@@ -395,7 +414,7 @@ export class SqliteStorage implements StorageAdapter {
             stoppedAt: row.stopped_at, status: row.status,
         }
     }
-    
+
     private rowToEntry(row: any): LogEntry {
         return {
             id: row.id, serviceUuid: row.service_uuid, containerId: row.container_id,

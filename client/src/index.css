@@ -237,10 +237,33 @@
 .log-entry-text,
 .log-entry-message,
 .log-entry-pretty,
+.env-entry-key,
+.env-entry-value,
+.env-entry-input,
 .sql-formatted {
     font-family: var(--log-font-family);
     font-size: var(--log-font-size);
     line-height: 1.6;
+}
+
+.env-entry-row {
+    --env-font-size: max(13px, calc(var(--log-font-size) + 1px));
+}
+
+.env-entry-key,
+.env-entry-value,
+.env-entry-input {
+    font-size: var(--env-font-size);
+    line-height: 1.6;
+}
+
+.env-entry-key {
+    font-weight: 650;
+    color: var(--foreground);
+}
+
+.env-entry-value {
+    color: var(--muted-foreground);
 }
 
 .log-entry-message {
