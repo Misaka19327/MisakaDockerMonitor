@@ -86,6 +86,17 @@ export class MysqlStorage implements StorageAdapter {
         )
     }
 
+    async setServiceEnvEditLock(serviceUuid: string, locked: boolean, reason: string | null = null): Promise<void> {
+        await this.pool.execute(
+            `UPDATE services
+             SET env_edit_locked = ?,
+                 env_edit_lock_reason = ?,
+                 env_edit_locked_at = ?
+             WHERE uuid = ?`,
+            [locked ? 1 : 0, reason, locked ? nowISO() : null, serviceUuid],
+        )
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
@@ -403,10 +414,16 @@ export class MysqlStorage implements StorageAdapter {
                     service      VARCHAR(255),
                     display_name VARCHAR(255) NOT NULL,
                     compose_path VARCHAR(1024) NULL,
+                    env_edit_locked TINYINT NOT NULL DEFAULT 0,
+                    env_edit_lock_reason TEXT NULL,
+                    env_edit_locked_at DATETIME NULL,
                     created_at   DATETIME     NOT NULL
                 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             `)
             await this.ensureColumn(conn, 'services', 'compose_path', 'VARCHAR(1024) NULL')
+            await this.ensureColumn(conn, 'services', 'env_edit_locked', 'TINYINT NOT NULL DEFAULT 0')
+            await this.ensureColumn(conn, 'services', 'env_edit_lock_reason', 'TEXT NULL')
+            await this.ensureColumn(conn, 'services', 'env_edit_locked_at', 'DATETIME NULL')
 
             await conn.execute(`
                 CREATE TABLE IF NOT EXISTS container_instances
@@ -457,6 +474,9 @@ export class MysqlStorage implements StorageAdapter {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
             service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            envEditLocked: row.env_edit_locked === 1,
+            envEditLockReason: row.env_edit_lock_reason ?? null,
+            envEditLockedAt: row.env_edit_locked_at ?? null,
             createdAt: row.created_at,
         }
     }

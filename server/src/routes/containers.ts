@@ -7,6 +7,9 @@ import type {LogCollector} from '../log-collector'
 import type {StorageAdapter} from '../storage'
 import {ServiceResolver} from '../service-resolver'
 import {formatBytes, formatUptime} from '../utils'
+import {applyComposeEnvOperations, type EnvOperation} from '../compose-env'
+
+const envCommitLocks = new Set<string>()
 
 export function containerRoutes(deps: { storage: StorageAdapter; collector: LogCollector }) {
   const {storage, collector} = deps
@@ -77,6 +80,9 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
           ports: info.NetworkSettings?.Ports,
           env: info.Config?.Env,
             composePath: service?.composePath ?? null,
+            envEditLocked: service?.envEditLocked ?? false,
+            envEditLockReason: service?.envEditLockReason ?? null,
+            envEditLockedAt: service?.envEditLockedAt ?? null,
             watched,
           health: state?.Health?.Status ?? null,
           exitCode: state?.ExitCode ?? null,
@@ -95,6 +101,10 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .post('/:uuid/env/compose-path/validate', async ({params, body, status}) => {
           const serviceUuid = await resolveExistingServiceUuid(params.uuid, storage, resolver)
           if (!serviceUuid) return status(404, {error: 'Container not found'})
+          const service = await storage.getServiceByUuid(serviceUuid)
+          if (service?.envEditLocked) {
+              return status(409, {error: service.envEditLockReason || 'Environment editor is locked'})
+          }
 
           const result = await validateComposePath(body.composePath)
           if (result.valid) {
@@ -108,7 +118,16 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .post('/:uuid/env', async ({params, body, status}) => {
           const guard = await validateEnvMutation(params.uuid, body.composePath, storage, resolver)
           if (!guard.ok) return status(guard.status, {error: guard.error})
-          return status(501, {error: 'Environment variable mutation API is reserved'})
+          const result = await commitEnvChanges({
+              serviceUuid: guard.serviceUuid,
+              composePath: guard.composePath,
+              projectName: guard.projectName,
+              serviceName: guard.serviceName,
+              operations: [{type: 'set', key: body.key, value: body.value}],
+              storage,
+          })
+          if (!result.success) return status(500, {error: result.error})
+          return result
       }, {
           params: t.Object({uuid: t.String()}),
           body: t.Object({composePath: t.String(), key: t.String(), value: t.String()}),
@@ -116,7 +135,16 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .patch('/:uuid/env/:key', async ({params, body, status}) => {
           const guard = await validateEnvMutation(params.uuid, body.composePath, storage, resolver)
           if (!guard.ok) return status(guard.status, {error: guard.error})
-          return status(501, {error: 'Environment variable mutation API is reserved'})
+          const result = await commitEnvChanges({
+              serviceUuid: guard.serviceUuid,
+              composePath: guard.composePath,
+              projectName: guard.projectName,
+              serviceName: guard.serviceName,
+              operations: [{type: 'rename', originalKey: params.key, key: body.key, value: body.value}],
+              storage,
+          })
+          if (!result.success) return status(500, {error: result.error})
+          return result
       }, {
           params: t.Object({uuid: t.String(), key: t.String()}),
           body: t.Object({composePath: t.String(), key: t.String(), value: t.String()}),
@@ -124,10 +152,43 @@ export function containerRoutes(deps: { storage: StorageAdapter; collector: LogC
       .delete('/:uuid/env/:key', async ({params, query, status}) => {
           const guard = await validateEnvMutation(params.uuid, query.composePath, storage, resolver)
           if (!guard.ok) return status(guard.status, {error: guard.error})
-          return status(501, {error: 'Environment variable mutation API is reserved'})
+          const result = await commitEnvChanges({
+              serviceUuid: guard.serviceUuid,
+              composePath: guard.composePath,
+              projectName: guard.projectName,
+              serviceName: guard.serviceName,
+              operations: [{type: 'delete', key: params.key}],
+              storage,
+          })
+          if (!result.success) return status(500, {error: result.error})
+          return result
       }, {
           params: t.Object({uuid: t.String(), key: t.String()}),
           query: t.Object({composePath: t.String()}),
+      })
+      .post('/:uuid/env/commit', async ({params, body, status}) => {
+          const guard = await validateEnvMutation(params.uuid, body.composePath, storage, resolver)
+          if (!guard.ok) return status(guard.status, {error: guard.error})
+          const result = await commitEnvChanges({
+              serviceUuid: guard.serviceUuid,
+              composePath: guard.composePath,
+              projectName: guard.projectName,
+              serviceName: guard.serviceName,
+              operations: body.operations as EnvOperation[],
+              storage,
+          })
+          if (!result.success) return status(500, {error: result.error})
+          return result
+      }, {
+          params: t.Object({uuid: t.String()}),
+          body: t.Object({
+              composePath: t.String(),
+              operations: t.Array(t.Union([
+                  t.Object({type: t.Literal('set'), key: t.String(), value: t.String()}),
+                  t.Object({type: t.Literal('rename'), originalKey: t.String(), key: t.String(), value: t.String()}),
+                  t.Object({type: t.Literal('delete'), key: t.String()}),
+              ])),
+          }),
       })
       .get('/:uuid/stats', async ({params, status}) => {
           const containerId = await resolveContainerId(params.uuid, storage, resolver)
@@ -250,7 +311,10 @@ async function validateEnvMutation(
     composePath: string,
     storage: StorageAdapter,
     resolver: ServiceResolver,
-): Promise<{ ok: true } | { ok: false; status: 400 | 404; error: string }> {
+): Promise<
+    { ok: true; serviceUuid: string; projectName: string; serviceName: string; composePath: string }
+    | { ok: false; status: 400 | 404 | 409; error: string }
+> {
     const serviceUuid = await resolveExistingServiceUuid(uuid, storage, resolver)
     if (!serviceUuid) return {ok: false, status: 404, error: 'Container not found'}
 
@@ -260,13 +324,131 @@ async function validateEnvMutation(
     if (storedComposePath !== composePath.trim()) {
         return {ok: false, status: 400, error: 'Compose path does not match the validated path'}
     }
+    if (!service?.project || !service.service) {
+        return {ok: false, status: 400, error: 'Environment editing requires a Docker Compose service'}
+    }
+    if (service.envEditLocked) {
+        return {ok: false, status: 409, error: service.envEditLockReason || 'Environment editor is locked'}
+    }
 
     const validation = await validateComposePath(storedComposePath)
     if (!validation.valid) {
         return {ok: false, status: 400, error: validation.message || 'Compose path is invalid'}
     }
 
-    return {ok: true}
+    return {ok: true, serviceUuid, projectName: service.project, serviceName: service.service, composePath: storedComposePath}
+}
+
+async function commitEnvChanges({
+    serviceUuid,
+    serviceName,
+    projectName,
+    composePath,
+    operations,
+    storage,
+}: {
+    serviceUuid: string
+    projectName: string
+    serviceName: string
+    composePath: string
+    operations: EnvOperation[]
+    storage: StorageAdapter
+}): Promise<{ success: true; env: string[] } | { success: false; error: string }> {
+    if (envCommitLocks.has(serviceUuid)) {
+        return {success: false, error: 'Environment changes are already being applied'}
+    }
+    envCommitLocks.add(serviceUuid)
+    await storage.setServiceEnvEditLock(serviceUuid, true, 'Environment changes are being applied')
+    try {
+        const {projectDirectory, env} = await applyComposeEnvOperations(composePath, serviceName, operations)
+        await rebuildComposeService(composePath, projectDirectory, serviceName)
+        await waitForServiceEnv(projectName, serviceName, operations)
+        await storage.setServiceEnvEditLock(serviceUuid, false, null)
+        return {success: true, env}
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to apply environment changes'
+        await storage.setServiceEnvEditLock(serviceUuid, true, message)
+        return {success: false, error: message}
+    } finally {
+        envCommitLocks.delete(serviceUuid)
+    }
+}
+
+async function rebuildComposeService(composePath: string, cwd: string, serviceName: string): Promise<void> {
+    const process = Bun.spawn(
+        ['docker-compose', '-f', composePath, 'up', '-d', '--build', '--force-recreate', '--no-deps', serviceName],
+        {cwd, stdout: 'pipe', stderr: 'pipe'},
+    )
+    const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+    ])
+    if (exitCode !== 0) {
+        throw new Error((stderr || stdout || `docker-compose exited with code ${exitCode}`).trim())
+    }
+}
+
+async function waitForServiceEnv(projectName: string, serviceName: string, operations: EnvOperation[]): Promise<void> {
+    const expected = new Map<string, string>()
+    const deleted = new Set<string>()
+    for (const operation of operations) {
+        if (operation.type === 'delete') {
+            deleted.add(operation.key)
+            expected.delete(operation.key)
+            continue
+        }
+        if (operation.type === 'rename' && operation.originalKey !== operation.key) {
+            deleted.add(operation.originalKey)
+        }
+        expected.set(operation.key, operation.value)
+        deleted.delete(operation.key)
+    }
+    const deadline = Date.now() + 60_000
+    let lastError = 'Container did not start with the updated environment'
+
+    while (Date.now() < deadline) {
+        const container = await findRunningComposeContainer(projectName, serviceName)
+        if (container) {
+            try {
+                const info = await getContainer(container.Id)
+                if (info.State?.Running && envMatchesOperations(info.Config?.Env ?? [], expected, deleted)) {
+                    return
+                }
+                lastError = info.State?.Running
+                    ? 'Container is running but environment did not refresh'
+                    : 'Container is not running after rebuild'
+            } catch (error) {
+                lastError = error instanceof Error ? error.message : lastError
+            }
+        }
+        await Bun.sleep(1000)
+    }
+
+    throw new Error(lastError)
+}
+
+async function findRunningComposeContainer(projectName: string, serviceName: string): Promise<any | null> {
+    const containers = await listContainers(false) as any[]
+    return containers.find(container => {
+        const labels: Record<string, string> = container.Labels || {}
+        return labels['com.docker.compose.project'] === projectName
+            && labels['com.docker.compose.service'] === serviceName
+    }) ?? null
+}
+
+function envMatchesOperations(actualEnv: string[], expected: Map<string, string>, deleted: Set<string>): boolean {
+    const actual = new Map(actualEnv.map(line => {
+        const eqIndex = line.indexOf('=')
+        return eqIndex < 0 ? [line, ''] : [line.slice(0, eqIndex), line.slice(eqIndex + 1)]
+    }))
+    for (const [key, value] of expected) {
+        if (actual.get(key) !== value) return false
+    }
+    for (const key of deleted) {
+        if (actual.has(key)) return false
+    }
+    return true
 }
 
 async function validateComposePath(composePath: string): Promise<{

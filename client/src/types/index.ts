@@ -29,6 +29,9 @@ export interface Container {
     restartPolicy?: string | null
     env?: string[] | null
     composePath?: string | null
+    envEditLocked?: boolean
+    envEditLockReason?: string | null
+    envEditLockedAt?: string | null
 }
 
 export interface LogEntry {
@@ -91,3 +94,8 @@ export interface ContainerEnvMutationResult {
     success: boolean
     env?: string[]
 }
+
+export type EnvOperation =
+    | { type: 'set'; key: string; value: string }
+    | { type: 'rename'; originalKey: string; key: string; value: string }
+    | { type: 'delete'; key: string }

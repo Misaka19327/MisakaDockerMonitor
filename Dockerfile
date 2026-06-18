@@ -13,6 +13,9 @@ COPY server/package.json server/bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY server/ ./
 
+# Docker CLI used by the env editor to run docker-compose against the mounted host socket.
+FROM docker:28-cli AS docker-cli
+
 # Production image
 FROM crpi-w68av1ccsmi71363.cn-beijing.personal.cr.aliyuncs.com/misaka19327/bun:1-slim
 WORKDIR /app/server
@@ -22,6 +25,12 @@ COPY --from=server-builder /app/server /app/server
 
 # Copy client build output
 COPY --from=client-builder /app/client/dist /app/client/dist
+
+# Copy Docker CLI and compose/buildx plugins for docker-compose rebuilds.
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
+RUN printf '#!/bin/sh\nexec docker compose "$@"\n' > /usr/local/bin/docker-compose \
+    && chmod +x /usr/local/bin/docker-compose
 
 # Data directory for SQLite
 RUN mkdir -p /app/data

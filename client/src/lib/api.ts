@@ -5,6 +5,7 @@ import type {
     Container,
     ContainerEnvMutationResult,
     ContainerInstance,
+    EnvOperation,
     GroupResult,
     LogQueryResult,
 } from '../types'
@@ -106,6 +107,13 @@ export const api = {
         deleteEnv(uuid: string, composePath: string, key: string): Promise<ContainerEnvMutationResult> {
             const qs = new URLSearchParams({composePath})
             return request(`/api/containers/${uuid}/env/${encodeURIComponent(key)}?${qs}`, {method: 'DELETE'})
+        },
+        commitEnvChanges(uuid: string, composePath: string, operations: EnvOperation[]): Promise<ContainerEnvMutationResult> {
+            return request(`/api/containers/${uuid}/env/commit`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({composePath, operations}),
+            })
         },
     },
 

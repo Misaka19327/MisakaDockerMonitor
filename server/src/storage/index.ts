@@ -8,6 +8,9 @@ export interface Service {
     service: string | null
     displayName: string
     composePath: string | null
+    envEditLocked: boolean
+    envEditLockReason: string | null
+    envEditLockedAt: string | null
     createdAt: string
 }
 
@@ -85,6 +88,8 @@ export interface StorageAdapter {
     getActiveContainerId(serviceUuid: string): Promise<string | null>
 
     setServiceComposePath(serviceUuid: string, composePath: string | null): Promise<void>
+
+    setServiceEnvEditLock(serviceUuid: string, locked: boolean, reason?: string | null): Promise<void>
 
     // Logs
     insertLogs(entries: LogEntry[]): Promise<void>

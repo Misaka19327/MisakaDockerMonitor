@@ -64,6 +64,17 @@ export class SqliteStorage implements StorageAdapter {
         )
     }
 
+    async setServiceEnvEditLock(serviceUuid: string, locked: boolean, reason: string | null = null): Promise<void> {
+        this.db.run(
+            `UPDATE services
+             SET env_edit_locked = ?,
+                 env_edit_lock_reason = ?,
+                 env_edit_locked_at = ?
+             WHERE uuid = ?`,
+            [locked ? 1 : 0, reason, locked ? nowISO() : null, serviceUuid],
+        )
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
@@ -342,10 +353,16 @@ export class SqliteStorage implements StorageAdapter {
                 service TEXT,
                 display_name TEXT NOT NULL,
                 compose_path TEXT,
+                env_edit_locked INTEGER NOT NULL DEFAULT 0,
+                env_edit_lock_reason TEXT,
+                env_edit_locked_at TEXT,
                 created_at TEXT NOT NULL
             )
         `)
         this.ensureColumn('services', 'compose_path', 'TEXT')
+        this.ensureColumn('services', 'env_edit_locked', 'INTEGER NOT NULL DEFAULT 0')
+        this.ensureColumn('services', 'env_edit_lock_reason', 'TEXT')
+        this.ensureColumn('services', 'env_edit_locked_at', 'TEXT')
 
         this.db.run(`
             CREATE TABLE IF NOT EXISTS container_instances (
@@ -396,6 +413,9 @@ export class SqliteStorage implements StorageAdapter {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
             service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            envEditLocked: row.env_edit_locked === 1,
+            envEditLockReason: row.env_edit_lock_reason ?? null,
+            envEditLockedAt: row.env_edit_locked_at ?? null,
             createdAt: row.created_at,
         }
     }

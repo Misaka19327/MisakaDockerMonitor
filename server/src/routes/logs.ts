@@ -35,7 +35,12 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
             const containerId = await storage.getActiveContainerId(params.serviceUuid)
             if (containerId) {
                 try {
-                    container = await getContainerDetail(containerId, params.serviceUuid, service?.composePath ?? null, collector)
+                    container = await getContainerDetail(containerId, params.serviceUuid, {
+                        composePath: service?.composePath ?? null,
+                        envEditLocked: service?.envEditLocked ?? false,
+                        envEditLockReason: service?.envEditLockReason ?? null,
+                        envEditLockedAt: service?.envEditLockedAt ?? null,
+                    }, collector)
                 } catch {
                 }
             }
@@ -47,6 +52,9 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
                         state: 'removed',
                         watched: false,
                         composePath: service.composePath,
+                        envEditLocked: service.envEditLocked,
+                        envEditLockReason: service.envEditLockReason,
+                        envEditLockedAt: service.envEditLockedAt,
                     }
                 }
             }
@@ -170,7 +178,12 @@ export function logRoutes(deps: { storage: StorageAdapter; collector: LogCollect
 async function getContainerDetail(
     containerId: string,
     serviceUuid: string,
-    composePath: string | null,
+    serviceState: {
+        composePath: string | null
+        envEditLocked: boolean
+        envEditLockReason: string | null
+        envEditLockedAt: string | null
+    },
     collector: { isWatching: (id: string) => boolean },
 ) {
     const info = await getContainer(containerId)
@@ -187,7 +200,10 @@ async function getContainerDetail(
         created: info.Created,
         ports: info.NetworkSettings?.Ports,
         env: info.Config?.Env,
-        composePath,
+        composePath: serviceState.composePath,
+        envEditLocked: serviceState.envEditLocked,
+        envEditLockReason: serviceState.envEditLockReason,
+        envEditLockedAt: serviceState.envEditLockedAt,
         watched: collector.isWatching(containerId),
         health: state?.Health?.Status ?? null,
         exitCode: state?.ExitCode ?? null,

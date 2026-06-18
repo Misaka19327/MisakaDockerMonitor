@@ -3,7 +3,7 @@ import {useNavigate, useParams} from 'react-router-dom'
 import {useQuery} from '@tanstack/react-query'
 import {api} from '../lib/api'
 import {markContainerOpened} from '../lib/container-preferences'
-import type {ComposePathValidationResult, Container, LogEntry} from '../types'
+import type {ComposePathValidationResult, Container, EnvOperation, LogEntry} from '../types'
 import {useContainerStatusStream} from '../hooks/useContainerStatusStream'
 import {useLogPagination} from '../hooks/useLogPagination'
 import {usePullToLoad} from '../hooks/usePullToLoad'
@@ -49,6 +49,7 @@ import {
     Shield,
     Trash2,
     X,
+    Undo2,
 } from 'lucide-react'
 
 export function LogViewer() {
@@ -416,6 +417,8 @@ export function LogViewer() {
                                 onValidateComposePath={validateComposePath}
                                 mutationMessage={envMutationMessage}
                                 onMutationMessageChange={setEnvMutationMessage}
+                                envEditLocked={container?.envEditLocked ?? false}
+                                envEditLockReason={container?.envEditLockReason ?? null}
                                 onRefresh={pagination.invalidate}
                             />
                         </DrawerContent>
@@ -583,6 +586,8 @@ function EnvEditor({
                        onValidateComposePath,
                        mutationMessage,
                        onMutationMessageChange,
+                       envEditLocked,
+                       envEditLockReason,
                        onRefresh,
                    }: {
     serviceUuid?: string
@@ -594,41 +599,101 @@ function EnvEditor({
     onValidateComposePath: () => void
     mutationMessage: string
     onMutationMessageChange: (value: string) => void
+    envEditLocked: boolean
+    envEditLockReason: string | null
     onRefresh: () => void
 }) {
     const {t} = useUiPreferences()
+    const initialDraft = useMemo(() => envToDraft(env), [env])
+    const [baseEnv, setBaseEnv] = useState<EnvDraftEntry[]>(initialDraft)
+    const [draftEnv, setDraftEnv] = useState<EnvDraftEntry[]>(initialDraft)
     const [newKey, setNewKey] = useState('')
     const [newValue, setNewValue] = useState('')
-    const [pendingAction, setPendingAction] = useState(false)
-    const canEdit = !!composeValidation?.valid
+    const [pendingSubmit, setPendingSubmit] = useState(false)
+    const [localEditLocked, setLocalEditLocked] = useState(envEditLocked)
+    const effectiveEditLocked = envEditLocked || localEditLocked
+    const canEdit = !!composeValidation?.valid && !effectiveEditLocked && !pendingSubmit
 
-    const runMutation = useCallback(async (action: () => Promise<unknown>) => {
-        if (!serviceUuid || !canEdit) {
+    useEffect(() => {
+        setLocalEditLocked(envEditLocked)
+    }, [envEditLocked])
+
+    useEffect(() => {
+        setBaseEnv(initialDraft)
+        setDraftEnv(initialDraft)
+        setNewKey('')
+        setNewValue('')
+    }, [initialDraft])
+
+    const operations = useMemo(() => buildEnvOperations(baseEnv, draftEnv), [baseEnv, draftEnv])
+    const hasChanges = operations.length > 0
+
+    const addEnv = useCallback(() => {
+        if (!canEdit) {
             onMutationMessageChange(t('viewer.env.pathPending'))
             return
         }
-        setPendingAction(true)
-        try {
-            await action()
-            onMutationMessageChange(t('viewer.env.apiPending'))
-            onRefresh()
-        } catch (error) {
-            const message = error instanceof Error ? error.message : t('viewer.env.apiPending')
-            onMutationMessageChange(message.includes('reserved') ? t('viewer.env.apiPending') : message)
-        } finally {
-            setPendingAction(false)
-        }
-    }, [canEdit, onMutationMessageChange, onRefresh, serviceUuid, t])
-
-    const addEnv = useCallback(() => {
         const key = newKey.trim()
         if (!key) return
-        void runMutation(() => api.containers.createEnv(serviceUuid!, composePath.trim(), key, newValue))
-    }, [composePath, newKey, newValue, runMutation, serviceUuid])
+        setDraftEnv(current => {
+            const existingIndex = current.findIndex(entry => !entry.deleted && entry.key === key)
+            if (existingIndex >= 0) {
+                return current.map((entry, index) => index === existingIndex ? {...entry, value: newValue} : entry)
+            }
+            return [...current, {id: `new-${Date.now()}-${key}`, originalKey: null, key, value: newValue, deleted: false}]
+        })
+        setNewKey('')
+        setNewValue('')
+        onMutationMessageChange(t('viewer.env.pendingChanges', {count: operations.length + 1}))
+    }, [canEdit, newKey, newValue, onMutationMessageChange, operations.length, t])
+
+    const updateDraft = useCallback((id: string, key: string, value: string) => {
+        setDraftEnv(current => current.map(entry => entry.id === id ? {...entry, key: key.trim(), value} : entry))
+    }, [])
+
+    const deleteDraft = useCallback((id: string) => {
+        setDraftEnv(current => current.map(entry => entry.id === id ? {...entry, deleted: true} : entry))
+    }, [])
+
+    const resetDraft = useCallback(() => {
+        setDraftEnv(baseEnv)
+        setNewKey('')
+        setNewValue('')
+        onMutationMessageChange('')
+    }, [baseEnv, onMutationMessageChange])
+
+    const submitChanges = useCallback(async () => {
+        if (!serviceUuid || !canEdit || operations.length === 0) return
+        setPendingSubmit(true)
+        onMutationMessageChange(t('viewer.env.submitting'))
+        try {
+            const result = await api.containers.commitEnvChanges(serviceUuid, composePath.trim(), operations)
+            if (result.success) {
+                const nextDraft = envToDraft(result.env ?? [])
+                setBaseEnv(nextDraft)
+                setDraftEnv(nextDraft)
+                setNewKey('')
+                setNewValue('')
+                toast.success(t('viewer.env.submitSuccess'))
+                onMutationMessageChange(t('viewer.env.submitSuccess'))
+                setLocalEditLocked(false)
+                onRefresh()
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : t('viewer.env.submitFailed')
+            toast.error(message)
+            onMutationMessageChange(message)
+            setLocalEditLocked(true)
+            onRefresh()
+        } finally {
+            setPendingSubmit(false)
+        }
+    }, [canEdit, composePath, onMutationMessageChange, onRefresh, operations, serviceUuid, t])
 
     const validationText = composeValidation?.valid
-        ? t('viewer.env.pathValid')
+        ? (effectiveEditLocked ? (envEditLockReason || t('viewer.env.locked')) : t('viewer.env.pathValid'))
         : composeValidation?.message || (composePath ? t('viewer.env.pathPending') : t('viewer.env.pathRequired'))
+    const visibleDraftEnv = draftEnv.filter(entry => !entry.deleted)
 
     return (
         <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 pb-4">
@@ -645,13 +710,14 @@ function EnvEditor({
                         onChange={event => onComposePathChange(event.target.value)}
                         placeholder={t('viewer.env.composePathPlaceholder')}
                         className="font-mono"
+                        disabled={effectiveEditLocked || pendingSubmit}
                     />
                     <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         onClick={onValidateComposePath}
-                        disabled={composeValidationLoading}
+                        disabled={composeValidationLoading || effectiveEditLocked || pendingSubmit}
                     >
                         {composeValidationLoading ? <Loader2 className="h-4 w-4 animate-spin"/> :
                             <Check className="h-4 w-4"/>}
@@ -662,17 +728,16 @@ function EnvEditor({
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto">
-                {env.length > 0 ? (
+                {visibleDraftEnv.length > 0 ? (
                     <div className="flex flex-col gap-1.5">
-                        {env.map((line, index) => (
+                        {visibleDraftEnv.map(entry => (
                             <EnvRow
-                                key={`${line}-${index}`}
-                                serviceUuid={serviceUuid}
-                                line={line}
-                                composePath={composePath}
+                                key={entry.id}
+                                entry={entry}
                                 canEdit={canEdit}
-                                pending={pendingAction}
-                                onMutation={runMutation}
+                                pending={pendingSubmit}
+                                onSave={updateDraft}
+                                onDelete={deleteDraft}
                                 onMessage={onMutationMessageChange}
                             />
                         ))}
@@ -686,30 +751,45 @@ function EnvEditor({
 
             {canEdit ? (
                 <div className="rounded-md border bg-card/60 p-3">
-                    <div className="mb-2 text-sm font-medium">{t('viewer.env.add')}</div>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="text-sm font-medium">{t('viewer.env.add')}</div>
+                        {hasChanges && <Badge variant="info">{t('viewer.env.pendingChanges', {count: operations.length})}</Badge>}
+                    </div>
                     <div className="grid grid-cols-[minmax(7rem,0.7fr)_minmax(8rem,1fr)_auto] gap-2">
                         <Input
                             value={newKey}
                             onChange={event => setNewKey(event.target.value)}
                             placeholder={t('viewer.env.key')}
                             className="font-mono"
-                            disabled={pendingAction}
+                            disabled={pendingSubmit}
                         />
                         <Input
                             value={newValue}
                             onChange={event => setNewValue(event.target.value)}
                             placeholder={t('viewer.env.value')}
                             className="font-mono"
-                            disabled={pendingAction}
+                            disabled={pendingSubmit}
                         />
                         <Button type="button" size="sm" onClick={addEnv}
-                                disabled={pendingAction || !newKey.trim()}>
+                                disabled={pendingSubmit || !newKey.trim()}>
                             <Plus className="h-4 w-4"/>
                             {t('viewer.env.add')}
                         </Button>
                     </div>
+                    <div className="mt-3 flex justify-end gap-2">
+                        <Button type="button" variant="ghost" size="sm" onClick={resetDraft}
+                                disabled={pendingSubmit || !hasChanges}>
+                            <Undo2 className="h-4 w-4"/>
+                            {t('viewer.env.discardChanges')}
+                        </Button>
+                        <Button type="button" size="sm" onClick={submitChanges}
+                                disabled={pendingSubmit || !hasChanges}>
+                            {pendingSubmit ? <Loader2 className="h-4 w-4 animate-spin"/> : <Save className="h-4 w-4"/>}
+                            {t('viewer.env.submitChanges')}
+                        </Button>
+                    </div>
                     <div className="mt-2 text-xs text-muted-foreground">
-                        {mutationMessage || t('viewer.env.doubleClickCopy')}
+                        {mutationMessage || t('viewer.env.batchHint')}
                     </div>
                 </div>
             ) : null}
@@ -718,33 +798,30 @@ function EnvEditor({
 }
 
 function EnvRow({
-                    serviceUuid,
-                    line,
-                    composePath,
+                    entry,
                     canEdit,
                     pending,
-                    onMutation,
+                    onSave,
+                    onDelete,
                     onMessage,
                 }: {
-    serviceUuid?: string
-    line: string
-    composePath: string
+    entry: EnvDraftEntry
     canEdit: boolean
     pending: boolean
-    onMutation: (action: () => Promise<unknown>) => Promise<void>
+    onSave: (id: string, key: string, value: string) => void
+    onDelete: (id: string) => void
     onMessage: (value: string) => void
 }) {
     const {t} = useUiPreferences()
     const clickTimerRef = useRef<number | null>(null)
-    const {key, value} = useMemo(() => parseEnvLine(line), [line])
     const [editing, setEditing] = useState(false)
-    const [draftKey, setDraftKey] = useState(key)
-    const [draftValue, setDraftValue] = useState(value)
+    const [draftKey, setDraftKey] = useState(entry.key)
+    const [draftValue, setDraftValue] = useState(entry.value)
 
     useEffect(() => {
-        setDraftKey(key)
-        setDraftValue(value)
-    }, [key, value])
+        setDraftKey(entry.key)
+        setDraftValue(entry.value)
+    }, [entry.key, entry.value])
 
     useEffect(() => () => {
         if (clickTimerRef.current != null) window.clearTimeout(clickTimerRef.current)
@@ -755,6 +832,7 @@ function EnvRow({
             window.clearTimeout(clickTimerRef.current)
             clickTimerRef.current = null
         }
+        const line = `${entry.key}=${entry.value}`
         const copied = await copyToClipboard(line)
         if (copied) {
             toast.success(t('viewer.env.copied'))
@@ -762,7 +840,7 @@ function EnvRow({
         } else {
             toast.error(t('viewer.env.copyFailed'))
         }
-    }, [line, onMessage, t])
+    }, [entry.key, entry.value, onMessage, t])
 
     const enterEdit = useCallback(() => {
         if (!canEdit) {
@@ -779,23 +857,22 @@ function EnvRow({
     }, [canEdit, onMessage, t])
 
     const cancelEdit = useCallback(() => {
-        setDraftKey(key)
-        setDraftValue(value)
+        setDraftKey(entry.key)
+        setDraftValue(entry.value)
         setEditing(false)
-    }, [key, value])
+    }, [entry.key, entry.value])
 
     const saveEdit = useCallback(() => {
         const nextKey = draftKey.trim()
-        if (!serviceUuid || !nextKey) return
-        void onMutation(() => api.containers.updateEnv(serviceUuid, composePath.trim(), key, nextKey, draftValue))
+        if (!nextKey) return
+        onSave(entry.id, nextKey, draftValue)
         setEditing(false)
-    }, [composePath, draftKey, draftValue, key, onMutation, serviceUuid])
+    }, [draftKey, draftValue, entry.id, onSave])
 
     const deleteEnv = useCallback(() => {
-        if (!serviceUuid) return
-        void onMutation(() => api.containers.deleteEnv(serviceUuid, composePath.trim(), key))
+        onDelete(entry.id)
         setEditing(false)
-    }, [composePath, key, onMutation, serviceUuid])
+    }, [entry.id, onDelete])
 
     if (editing) {
         return (
@@ -842,11 +919,55 @@ function EnvRow({
             onDoubleClick={copyLine}
         >
             <div className="min-w-0">
-                <div className="env-entry-key break-all">{key}</div>
-                {value && <div className="env-entry-value mt-1 break-all">{value}</div>}
+                <div className="env-entry-key break-all">{entry.key}</div>
+                {entry.value && <div className="env-entry-value mt-1 break-all">{entry.value}</div>}
             </div>
         </button>
     )
+}
+
+interface EnvDraftEntry {
+    id: string
+    originalKey: string | null
+    key: string
+    value: string
+    deleted: boolean
+}
+
+function envToDraft(env: string[]): EnvDraftEntry[] {
+    return env.map((line, index) => {
+        const {key, value} = parseEnvLine(line)
+        return {
+            id: `env-${index}-${key}`,
+            originalKey: key,
+            key,
+            value,
+            deleted: false,
+        }
+    })
+}
+
+function buildEnvOperations(initial: EnvDraftEntry[], draft: EnvDraftEntry[]): EnvOperation[] {
+    const operations: EnvOperation[] = []
+    const initialById = new Map(initial.map(entry => [entry.id, entry]))
+
+    for (const entry of draft) {
+        const original = initialById.get(entry.id)
+        if (entry.deleted) {
+            if (original?.originalKey) operations.push({type: 'delete', key: original.originalKey})
+            continue
+        }
+        if (!entry.key.trim()) continue
+        if (!original || !entry.originalKey) {
+            operations.push({type: 'set', key: entry.key, value: entry.value})
+            continue
+        }
+        if (entry.key !== original.key || entry.value !== original.value) {
+            operations.push({type: 'rename', originalKey: original.key, key: entry.key, value: entry.value})
+        }
+    }
+
+    return operations
 }
 
 function parseEnvLine(line: string): { key: string; value: string } {

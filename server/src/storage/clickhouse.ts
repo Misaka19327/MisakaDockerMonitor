@@ -48,6 +48,9 @@ export class ClickHouseStorage implements StorageAdapter {
                 service,
                 display_name: displayName,
                 compose_path: null,
+                env_edit_locked: 0,
+                env_edit_lock_reason: null,
+                env_edit_locked_at: null,
                 created_at: nowISO().substring(0, 19)
             }],
             format: 'JSONEachRow',
@@ -85,6 +88,16 @@ export class ClickHouseStorage implements StorageAdapter {
             query: `ALTER TABLE services UPDATE compose_path = ${
                     composePath ? `'${escapeClickHouseString(composePath)}'` : 'NULL'
             } WHERE uuid = '${escapeClickHouseString(serviceUuid)}'`,
+        })
+    }
+
+    async setServiceEnvEditLock(serviceUuid: string, locked: boolean, reason: string | null = null): Promise<void> {
+        await this.client.exec({
+            query: `ALTER TABLE services UPDATE
+                    env_edit_locked = ${locked ? 1 : 0},
+                    env_edit_lock_reason = ${reason ? `'${escapeClickHouseString(reason)}'` : 'NULL'},
+                    env_edit_locked_at = ${locked ? `'${nowISO().substring(0, 19)}'` : 'NULL'}
+                    WHERE uuid = '${escapeClickHouseString(serviceUuid)}'`,
         })
     }
 
@@ -346,10 +359,16 @@ export class ClickHouseStorage implements StorageAdapter {
                 service Nullable(String),
                 display_name String,
                 compose_path Nullable(String),
+                env_edit_locked UInt8 DEFAULT 0,
+                env_edit_lock_reason Nullable(String),
+                env_edit_locked_at Nullable(DateTime),
                 created_at DateTime
             ) ENGINE = MergeTree() ORDER BY (service_key)`,
         })
         await this.client.exec({query: `ALTER TABLE services ADD COLUMN IF NOT EXISTS compose_path Nullable(String)`})
+        await this.client.exec({query: `ALTER TABLE services ADD COLUMN IF NOT EXISTS env_edit_locked UInt8 DEFAULT 0`})
+        await this.client.exec({query: `ALTER TABLE services ADD COLUMN IF NOT EXISTS env_edit_lock_reason Nullable(String)`})
+        await this.client.exec({query: `ALTER TABLE services ADD COLUMN IF NOT EXISTS env_edit_locked_at Nullable(DateTime)`})
 
         await this.client.exec({
             query: `CREATE TABLE IF NOT EXISTS container_instances (
@@ -389,6 +408,9 @@ export class ClickHouseStorage implements StorageAdapter {
         return {
             uuid: row.uuid, serviceKey: row.service_key, project: row.project,
             service: row.service, displayName: row.display_name, composePath: row.compose_path ?? null,
+            envEditLocked: row.env_edit_locked === 1,
+            envEditLockReason: row.env_edit_lock_reason ?? null,
+            envEditLockedAt: row.env_edit_locked_at ?? null,
             createdAt: row.created_at,
         }
     }
