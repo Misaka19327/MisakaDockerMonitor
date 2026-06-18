@@ -87,6 +87,7 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
     const duration = (parsed as any).duration as string | undefined
     const span = (parsed as any).span as string | undefined
     const trace = (parsed as any).trace as string | undefined
+    const summaryContent = getJsonSummaryContent(content, method, path, entry.hasSql)
     const copyRawLog = useCallback(async () => {
         const copied = await copyToClipboard(entry.rawContent ?? entry.content ?? '')
         if (copied) toast.success(t('viewer.copy.copied'))
@@ -119,15 +120,27 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
                     <div className="log-entry-prefix">
                         {level && <Badge variant={levelVariant(level)}
                                          className="log-entry-level-badge shrink-0">{level}</Badge>}
-                        {caller && <span className="log-entry-meta log-entry-caller truncate max-w-48">{caller}</span>}
+                        {caller && (
+                            <span className="log-entry-meta log-entry-caller truncate max-w-48" title={caller}>
+                                {caller}
+                            </span>
+                        )}
                         {method && path && (
-                            <span className="log-entry-meta log-entry-path shrink-0">{method} {path}</span>
+                            <span className="log-entry-meta log-entry-path" title={`${method} ${path}`}>
+                                {method} {path}
+                            </span>
                         )}
                     </div>
-                    <span className="log-entry-message truncate">{content}</span>
+                    {summaryContent && (
+                        <span className="log-entry-message truncate" title={summaryContent}>
+                            {summaryContent}
+                        </span>
+                    )}
                     {entry.hasSql && (
                         <button
                             type="button"
+                            title={entry.sql ?? t('viewer.sqlSummaryFallback')}
+                            aria-expanded={showSql}
                             onClick={e => {
                                 e.stopPropagation()
                                 onToggleSql()
@@ -190,6 +203,19 @@ function JsonLogEntry({entry, expanded, onToggle, showSql, onToggleSql, timezone
             )}
         </div>
     )
+}
+
+function getJsonSummaryContent(
+    content: string,
+    method: string | undefined,
+    path: string | undefined,
+    hasSql: boolean,
+): string | null {
+    const trimmed = content.trim()
+    if (!trimmed) return null
+    if (hasSql && trimmed.toLowerCase() === 'sql') return null
+    if (method && path && trimmed === `${method} ${path}`) return null
+    return trimmed
 }
 
 function TextLogEntry({entry, timezone}: { entry: ResolvedLogEntry; timezone?: string }) {

@@ -199,8 +199,8 @@
     align-items: center;
     gap: 0.5rem;
     min-width: 0;
-    flex: 0 0 auto;
-    max-width: 24rem;
+    flex: 0 1 auto;
+    max-width: min(46rem, 54vw);
 }
 
 .log-entry-meta,
@@ -226,6 +226,11 @@
 }
 
 .log-entry-path {
+    min-width: 0;
+    max-width: min(30rem, 34vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: oklch(0.58 0.16 75);
 }
 
@@ -267,7 +272,7 @@
 }
 
 .log-entry-message {
-    flex: 1 1 0%;
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -276,6 +281,7 @@
 
 .log-entry-main:has(.log-entry-sql-chip) .log-entry-message {
     flex: 0 1 auto;
+    color: var(--muted-foreground);
 }
 
 .log-entry-text,
@@ -299,7 +305,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    max-width: min(52rem, 62vw);
+    max-width: min(34rem, 38vw);
     flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
@@ -324,6 +330,8 @@
     font-family: var(--log-font-family);
     font-size: calc(var(--log-font-size) - 1px);
     line-height: 1.4;
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .log-entry-sql-label {
@@ -333,14 +341,15 @@
 }
 
 .log-entry-sql-action {
+    flex: 0 0 auto;
     font-weight: 600;
     color: color-mix(in oklch, var(--primary) 82%, var(--foreground));
 }
 
 .log-entry-sql-primary {
     display: inline-block;
-    min-width: 0;
-    max-width: 18rem;
+    flex: 0 1 auto;
+    max-width: 16rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -353,8 +362,8 @@
 
 .log-entry-sql-join {
     display: inline-block;
-    min-width: 0;
-    max-width: 14rem;
+    flex: 0 2 auto;
+    max-width: 12rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
