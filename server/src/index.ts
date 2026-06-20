@@ -33,6 +33,7 @@ async function main() {
     // Initialize storage
     const storage = await createStorage(config.storageType)
     await storage.initialize()
+    await storage.clearServiceEnvEditLocks()
     console.log(`Storage initialized`)
     
     // Initialize log collector

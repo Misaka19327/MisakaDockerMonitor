@@ -91,6 +91,8 @@ export interface StorageAdapter {
 
     setServiceEnvEditLock(serviceUuid: string, locked: boolean, reason?: string | null): Promise<void>
 
+    clearServiceEnvEditLocks(): Promise<void>
+
     // Logs
     insertLogs(entries: LogEntry[]): Promise<void>
     insertLog(entry: LogEntry): Promise<void>

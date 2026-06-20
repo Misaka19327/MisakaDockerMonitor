@@ -10,6 +10,7 @@ export type EnvOperation =
 export interface ComposeEnvCommitResult {
     projectDirectory: string
     env: string[]
+    originalContent: string
 }
 
 export async function applyComposeEnvOperations(
@@ -58,6 +59,7 @@ export async function applyComposeEnvOperations(
     return {
         projectDirectory: dirname(composePath),
         env: Array.from(env.entries()).map(([key, value]) => `${key}=${value}`),
+        originalContent: content,
     }
 }
 

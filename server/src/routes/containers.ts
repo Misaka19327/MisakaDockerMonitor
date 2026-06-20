@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 import {basename} from 'path'
-import {readFile, stat} from 'fs/promises'
+import {readFile, stat, writeFile} from 'fs/promises'
 import {authGuard} from '../plugins/auth-guard'
 import {getContainer, getContainerStats, listContainers} from '../docker'
 import type {LogCollector} from '../log-collector'
@@ -367,18 +367,33 @@ async function commitEnvChanges({
     await storage.setServiceEnvEditLock(serviceUuid, true, 'Environment changes are being applied')
     try {
         const composeImageEnv = await inferCurrentComposeImageEnv(composePath, projectName, serviceName)
-        const {projectDirectory, env} = await applyComposeEnvOperations(composePath, serviceName, operations)
-        await rebuildComposeService(composePath, projectDirectory, serviceName, composeImageEnv)
+        const {projectDirectory, env, originalContent} = await applyComposeEnvOperations(composePath, serviceName, operations)
+        try {
+            await rebuildComposeService(composePath, projectDirectory, serviceName, composeImageEnv)
+        } catch (error) {
+            await rollbackComposeFile(composePath, originalContent, error)
+        }
         await waitForServiceEnv(projectName, serviceName, operations)
         await storage.setServiceEnvEditLock(serviceUuid, false, null)
         return {success: true, env}
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to apply environment changes'
-        await storage.setServiceEnvEditLock(serviceUuid, true, message)
+        await storage.setServiceEnvEditLock(serviceUuid, false, null)
         return {success: false, error: message}
     } finally {
         envCommitLocks.delete(serviceUuid)
     }
+}
+
+async function rollbackComposeFile(composePath: string, originalContent: string, cause: unknown): Promise<never> {
+    const message = cause instanceof Error ? cause.message : 'Failed to rebuild compose service'
+    try {
+        await writeFile(composePath, originalContent, 'utf8')
+    } catch (rollbackError) {
+        const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : 'unknown error'
+        throw new Error(`${message}; rollback failed: ${rollbackMessage}`)
+    }
+    throw new Error(message)
 }
 
 async function inferCurrentComposeImageEnv(

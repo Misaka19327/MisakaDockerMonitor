@@ -75,6 +75,16 @@ export class SqliteStorage implements StorageAdapter {
         )
     }
 
+    async clearServiceEnvEditLocks(): Promise<void> {
+        this.db.run(
+            `UPDATE services
+             SET env_edit_locked = 0,
+                 env_edit_lock_reason = NULL,
+                 env_edit_locked_at = NULL
+             WHERE env_edit_locked != 0`,
+        )
+    }
+
     // --- Logs ---
 
     async insertLog(entry: LogEntry): Promise<void> {
