@@ -8,6 +8,12 @@ import type {StorageAdapter} from '../storage'
 import {ServiceResolver} from '../service-resolver'
 import {formatBytes, formatUptime} from '../utils'
 import {applyComposeEnvOperations, type EnvOperation} from '../compose-env'
+import {
+    getComposeImageVariableNames,
+    getRequiredComposeImageVariableNames,
+    getServiceImageTemplate,
+    inferComposeImageVariables,
+} from '../compose-image-vars'
 
 const envCommitLocks = new Set<string>()
 
@@ -360,8 +366,9 @@ async function commitEnvChanges({
     envCommitLocks.add(serviceUuid)
     await storage.setServiceEnvEditLock(serviceUuid, true, 'Environment changes are being applied')
     try {
+        const composeImageEnv = await inferCurrentComposeImageEnv(composePath, projectName, serviceName)
         const {projectDirectory, env} = await applyComposeEnvOperations(composePath, serviceName, operations)
-        await rebuildComposeService(composePath, projectDirectory, serviceName)
+        await rebuildComposeService(composePath, projectDirectory, serviceName, composeImageEnv)
         await waitForServiceEnv(projectName, serviceName, operations)
         await storage.setServiceEnvEditLock(serviceUuid, false, null)
         return {success: true, env}
@@ -374,15 +381,48 @@ async function commitEnvChanges({
     }
 }
 
-async function rebuildComposeService(composePath: string, cwd: string, serviceName: string): Promise<void> {
-    const process = Bun.spawn(
+async function inferCurrentComposeImageEnv(
+    composePath: string,
+    projectName: string,
+    serviceName: string,
+): Promise<Record<string, string>> {
+    const composeContent = await readFile(composePath, 'utf8')
+    const imageTemplate = getServiceImageTemplate(composeContent, serviceName)
+    const imageVariables = getComposeImageVariableNames(imageTemplate)
+    if (imageVariables.length === 0) return {}
+
+    const container = await findRunningComposeContainer(projectName, serviceName)
+    if (!container) {
+        const requiredVariables = getRequiredComposeImageVariableNames(imageTemplate)
+        if (requiredVariables.every(variable => process.env[variable])) return {}
+        throw new Error(`Compose image requires ${requiredVariables.join(', ')}, but no running container was found to infer it from`)
+    }
+
+    const info = await getContainer(container.Id)
+    const imageEnv = inferComposeImageVariables(imageTemplate, info.Config?.Image ?? null)
+    const requiredVariables = getRequiredComposeImageVariableNames(imageTemplate)
+    const missingVariables = requiredVariables.filter(variable => !imageEnv[variable] && !process.env[variable])
+    if (missingVariables.length > 0) {
+        throw new Error(`Compose image requires ${missingVariables.join(', ')}, but it could not be inferred from current image "${info.Config?.Image ?? ''}"`)
+    }
+
+    return imageEnv
+}
+
+async function rebuildComposeService(
+    composePath: string,
+    cwd: string,
+    serviceName: string,
+    composeImageEnv: Record<string, string>,
+): Promise<void> {
+    const child = Bun.spawn(
         ['docker-compose', '-f', composePath, 'up', '-d', '--build', '--force-recreate', '--no-deps', serviceName],
-        {cwd, stdout: 'pipe', stderr: 'pipe'},
+        {cwd, env: {...process.env, ...composeImageEnv}, stdout: 'pipe', stderr: 'pipe'},
     )
     const [stdout, stderr, exitCode] = await Promise.all([
-        new Response(process.stdout).text(),
-        new Response(process.stderr).text(),
-        process.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
     ])
     if (exitCode !== 0) {
         throw new Error((stderr || stdout || `docker-compose exited with code ${exitCode}`).trim())
