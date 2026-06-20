@@ -664,6 +664,13 @@ function EnvEditor({
 
     const submitChanges = useCallback(async () => {
         if (!serviceUuid || !canEdit || operations.length === 0) return
+        const duplicateKey = findDuplicateEnvKey(draftEnv)
+        if (duplicateKey) {
+            const message = t('viewer.env.duplicateKey', {key: duplicateKey})
+            toast.error(message)
+            onMutationMessageChange(message)
+            return
+        }
         setPendingSubmit(true)
         onMutationMessageChange(t('viewer.env.submitting'))
         try {
@@ -688,7 +695,7 @@ function EnvEditor({
         } finally {
             setPendingSubmit(false)
         }
-    }, [canEdit, composePath, onMutationMessageChange, onRefresh, operations, serviceUuid, t])
+    }, [canEdit, composePath, draftEnv, onMutationMessageChange, onRefresh, operations, serviceUuid, t])
 
     const validationText = composeValidation?.valid
         ? (effectiveEditLocked ? (envEditLockReason || t('viewer.env.locked')) : t('viewer.env.pathValid'))
@@ -968,6 +975,18 @@ function buildEnvOperations(initial: EnvDraftEntry[], draft: EnvDraftEntry[]): E
     }
 
     return operations
+}
+
+function findDuplicateEnvKey(draft: EnvDraftEntry[]): string | null {
+    const seen = new Set<string>()
+    for (const entry of draft) {
+        if (entry.deleted) continue
+        const key = entry.key.trim()
+        if (!key) continue
+        if (seen.has(key)) return key
+        seen.add(key)
+    }
+    return null
 }
 
 function parseEnvLine(line: string): { key: string; value: string } {

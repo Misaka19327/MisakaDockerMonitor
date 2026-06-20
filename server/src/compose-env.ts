@@ -13,6 +13,11 @@ export interface ComposeEnvCommitResult {
     originalContent: string
 }
 
+interface EnvironmentEntry {
+    key: string
+    value: string
+}
+
 export async function applyComposeEnvOperations(
     composePath: string,
     serviceName: string,
@@ -43,7 +48,11 @@ export async function applyComposeEnvOperations(
         throw new Error(`Compose service "${serviceName}" was not found`)
     }
 
-    const env = readEnvironment(serviceNode)
+    const envEntries = readEnvironmentEntries(serviceNode)
+    assertUniqueKeys(envEntries.map(entry => entry.key))
+    assertOperationsKeepUniqueKeys(envEntries.map(entry => entry.key), operations)
+
+    const env = new Map(envEntries.map(entry => [entry.key, entry.value]))
     for (const operation of operations) {
         applyOperation(env, operation)
     }
@@ -63,8 +72,8 @@ export async function applyComposeEnvOperations(
     }
 }
 
-function readEnvironment(serviceNode: YAMLMap): Map<string, string> {
-    const env = new Map<string, string>()
+function readEnvironmentEntries(serviceNode: YAMLMap): EnvironmentEntry[] {
+    const env: EnvironmentEntry[] = []
     const environmentNode = serviceNode.get('environment', true)
     if (!environmentNode) {
         return env
@@ -74,7 +83,7 @@ function readEnvironment(serviceNode: YAMLMap): Map<string, string> {
         for (const pair of environmentNode.items) {
             const key = String(pair.key instanceof Scalar ? pair.key.value : pair.key)
             const rawValue = pair.value instanceof Scalar ? pair.value.value : pair.value
-            env.set(key, rawValue == null ? '' : String(rawValue))
+            env.push({key, value: rawValue == null ? '' : String(rawValue)})
         }
         return env
     }
@@ -86,15 +95,53 @@ function readEnvironment(serviceNode: YAMLMap): Map<string, string> {
             const line = String(raw)
             const eqIndex = line.indexOf('=')
             if (eqIndex < 0) {
-                env.set(line, '')
+                env.push({key: line, value: ''})
             } else {
-                env.set(line.slice(0, eqIndex), line.slice(eqIndex + 1))
+                env.push({key: line.slice(0, eqIndex), value: line.slice(eqIndex + 1)})
             }
         }
         return env
     }
 
     throw new Error('Compose service environment must be a map or list')
+}
+
+function assertOperationsKeepUniqueKeys(initialKeys: string[], operations: EnvOperation[]): void {
+    const keys = [...initialKeys]
+    for (const operation of operations) {
+        switch (operation.type) {
+            case 'set': {
+                const key = normalizeKey(operation.key)
+                if (!keys.includes(key)) keys.push(key)
+                break
+            }
+            case 'rename': {
+                const originalKey = normalizeKey(operation.originalKey)
+                const key = normalizeKey(operation.key)
+                const index = keys.indexOf(originalKey)
+                if (index >= 0) keys[index] = key
+                else keys.push(key)
+                break
+            }
+            case 'delete': {
+                const key = normalizeKey(operation.key)
+                const index = keys.indexOf(key)
+                if (index >= 0) keys.splice(index, 1)
+                break
+            }
+        }
+        assertUniqueKeys(keys)
+    }
+}
+
+function assertUniqueKeys(keys: string[]): void {
+    const seen = new Set<string>()
+    for (const key of keys) {
+        if (seen.has(key)) {
+            throw new Error(`Duplicate environment variable key: ${key}`)
+        }
+        seen.add(key)
+    }
 }
 
 function applyOperation(env: Map<string, string>, operation: EnvOperation): void {
