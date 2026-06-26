@@ -160,7 +160,10 @@
 /* Log viewer styles */
 .log-entry-row {
     display: grid;
-    grid-template-columns: 0.875rem 2.25rem max-content minmax(0, 1fr) auto;
+    /* Line-number column: hold a fixed 2.25rem floor until the digits
+       outgrow it (≥6 digits), then grow to max-content so the timestamp
+       and everything to the right shifts over instead of clipping. */
+    grid-template-columns: 0.875rem minmax(2.25rem, max-content) max-content minmax(0, 1fr) auto;
     gap: 0.5rem;
     align-items: center;
 }
